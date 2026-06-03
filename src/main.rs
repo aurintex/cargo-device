@@ -7,9 +7,10 @@ mod config;
 mod deploy;
 mod device;
 mod error;
+mod resolve;
 mod run;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -69,11 +70,9 @@ fn main() -> Result<()> {
     } else {
         tracing::Level::INFO
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env().add_directive(level.into()),
-        )
-        .init();
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(level.to_string()));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let cfg = config::load()?;
 
@@ -81,15 +80,18 @@ fn main() -> Result<()> {
         Command::List => list_devices(&cfg),
         Command::Build { device, cargo_args } => {
             let dev = device::resolve(&cfg, &device)?;
+            let cargo_args = resolve::with_package_flag(&dev, cargo_args);
             build::run(&dev, &cargo_args)?;
         }
         Command::Run { device, cargo_args } => {
             let dev = device::resolve(&cfg, &device)?;
+            let (cargo_args, remote_args) = resolve::split_cargo_and_remote(&cargo_args);
+            let cargo_args = resolve::with_package_flag(&dev, cargo_args);
             let is_release = cargo_args.iter().any(|a| a == "--release");
-            let bin_name = read_package_name()?;
+            let bin_name = resolve::resolve_binary_name(&dev)?;
             build::run(&dev, &cargo_args)?;
             deploy::run(&dev, is_release, &bin_name)?;
-            run::execute(&dev, &bin_name, &cargo_args)?;
+            run::execute(&dev, &bin_name, &cargo_args, &remote_args)?;
         }
         Command::Sync { device } => {
             let dev = device::resolve(&cfg, &device)?;
@@ -122,20 +124,4 @@ fn list_devices(cfg: &config::Config) {
         let host = d.ssh_host.as_deref().unwrap_or("local");
         println!("{name:<name_w$}  {target:<target_w$}  {host}");
     }
-}
-
-fn read_package_name() -> Result<String> {
-    #[derive(serde::Deserialize)]
-    struct CargoToml {
-        package: Package,
-    }
-    #[derive(serde::Deserialize)]
-    struct Package {
-        name: String,
-    }
-    let content = std::fs::read_to_string("Cargo.toml")
-        .context("failed to read Cargo.toml — run cargo device from the project root")?;
-    let parsed: CargoToml =
-        toml::from_str(&content).context("failed to parse Cargo.toml [package]")?;
-    Ok(parsed.package.name)
 }
