@@ -1,0 +1,3 @@
+[workspace]
+members = ["sensor-log"]
+resolver = "2"

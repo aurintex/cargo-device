@@ -18,6 +18,10 @@ pub struct DeviceConfig {
     pub target: Option<String>,
     pub linker: Option<String>,
     pub sdk: Option<String>,
+    /// Workspace member crate for `cargo -p` (also default binary name when `binary` is unset).
+    pub package: Option<String>,
+    /// Deployed binary file name (defaults to `package` when unset).
+    pub binary: Option<String>,
     pub ssh_host: Option<String>,
     pub ssh_key: Option<String>,
     pub deploy_path: Option<String>,
@@ -31,6 +35,8 @@ impl DeviceConfig {
             target: other.target.or(self.target),
             linker: other.linker.or(self.linker),
             sdk: other.sdk.or(self.sdk),
+            package: other.package.or(self.package),
+            binary: other.binary.or(self.binary),
             ssh_host: other.ssh_host.or(self.ssh_host),
             ssh_key: other.ssh_key.or(self.ssh_key),
             deploy_path: other.deploy_path.or(self.deploy_path),
@@ -146,6 +152,22 @@ mod tests {
         let merged = DeviceConfig::default().merge(DeviceConfig::default());
         assert!(merged.ssh_host.is_none());
         assert!(merged.target.is_none());
+    }
+
+    #[test]
+    fn merge_package_and_binary() {
+        let base = DeviceConfig {
+            package: Some("base-pkg".into()),
+            binary: Some("base-bin".into()),
+            ..Default::default()
+        };
+        let other = DeviceConfig {
+            binary: Some("other-bin".into()),
+            ..Default::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.package.as_deref(), Some("base-pkg"));
+        assert_eq!(merged.binary.as_deref(), Some("other-bin"));
     }
 
     #[test]

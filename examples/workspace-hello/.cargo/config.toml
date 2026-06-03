@@ -1,0 +1,14 @@
+# Workspace example: a root Cargo.toml with [workspace] but no [package].
+# Set `package` on each device entry so cargo-device knows which member to build.
+
+[device.desktop]
+# Native build, no deployment
+package = "sensor-log"
+
+[device.radxa]
+target    = "aarch64-unknown-linux-gnu"
+linker    = "aarch64-linux-gnu-gcc"      # apt: gcc-aarch64-linux-gnu
+ssh_host  = "radxa@<YOUR_DEVICE_IP>"     # set real value in device.local.toml
+ssh_key   = "~/.ssh/id_ed25519"          # set real value in device.local.toml
+deploy_path = "/home/radxa/sensor-log"
+package   = "sensor-log"

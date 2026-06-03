@@ -23,6 +23,7 @@ pub fn copy_binary(device: &Device, release: bool, binary_name: &str) -> Result<
     if device.is_desktop() {
         return Ok(());
     }
+    ensure_deploy_path(device)?;
     let (host, deploy_path) = device.require_ssh()?;
     which("rsync").context("rsync is not installed — install rsync to use deploy")?;
     let profile = if release { "release" } else { "debug" };
@@ -45,6 +46,7 @@ pub fn sync_dirs(device: &Device) -> Result<()> {
     if device.sync_dirs.is_empty() {
         return Ok(());
     }
+    ensure_deploy_path(device)?;
     let (host, deploy_path) = device.require_ssh()?;
     which("rsync").context("rsync is not installed — install rsync to use sync")?;
     for dir in &device.sync_dirs {
@@ -60,5 +62,21 @@ pub fn sync_dirs(device: &Device) -> Result<()> {
         cmd.arg(&src).arg(&dst);
         cmd.status().require_success("rsync")?;
     }
+    Ok(())
+}
+
+/// Create `deploy_path` on the device when missing (needed before `sync` without a prior binary deploy).
+fn ensure_deploy_path(device: &Device) -> Result<()> {
+    if device.is_desktop() {
+        return Ok(());
+    }
+    which("ssh").context("ssh is not installed — install OpenSSH to use deploy/run")?;
+    let (host, deploy_path) = device.require_ssh()?;
+    let mut cmd = Command::new("ssh");
+    if let Some(key) = &device.ssh_key {
+        cmd.arg("-i").arg(key);
+    }
+    cmd.arg(host).arg("--").args(["mkdir", "-p", deploy_path]);
+    cmd.status().require_success("ssh mkdir")?;
     Ok(())
 }

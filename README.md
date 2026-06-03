@@ -19,6 +19,19 @@ Developers currently juggle Python scripts, shell scripts, and manual combinatio
 
 ---
 
+## System dependencies
+
+`cargo-device` orchestrates existing tools — it does not bundle SSH or file-transfer protocols.
+
+| Tool | Required for | Notes |
+|------|-------------|-------|
+| `ssh` (OpenSSH) | `run`, `deploy`, `sync` on remote devices | Pre-installed on macOS and most Linux distros |
+| `rsync` | `deploy`, `sync` on remote devices | `apt install rsync` / `brew install rsync` |
+| `cross` | Build fallback when no `linker` or `sdk` is set | `cargo install cross` (requires Docker) |
+| Cross-linker (e.g. `gcc-aarch64-linux-gnu`) | Build when `linker` is set | Recommended over `cross` — no Docker needed |
+
+`ssh` and `rsync` are detected at runtime; `cargo-device` reports a clear error if a required tool is missing. `cross` is only invoked when neither `sdk` nor `linker` is configured.
+
 ## Installation
 
 ```bash
@@ -68,6 +81,20 @@ ssh_host = "pi@192.168.1.42"         # override this in device.local.toml
 ssh_key = "~/.ssh/id_ed25519"
 deploy_path = "/tmp/myapp"
 sync_dirs = ["models/", "config/"]   # optional: rsync these directories too
+package = "myapp"                  # optional: workspace crate for `cargo -p`
+binary  = "myapp"                  # optional: deployed binary name (defaults to package)
+```
+
+### Cargo workspaces
+
+For workspace roots without a top-level `[package]`, set `package` (and optionally `binary`) on the device. `cargo device` injects `-p <package>` when you do not pass `-p` yourself.
+
+### Remote binary arguments (`run` only)
+
+With `cargo device run`, pass cargo flags first, then `--`, then arguments for the binary on the device:
+
+```bash
+cargo device run raspi --release -- status -v
 ```
 
 Override per-machine settings in `.cargo/device.local.toml` (add to `.gitignore`):
