@@ -23,7 +23,8 @@ pub fn resolve(cfg: &Config, name: &str) -> Result<Device> {
     let raw = cfg.device.get(name).with_context(|| {
         format!(
             "device '{name}' not found — add a [device.{name}] table to \
-                 .cargo/config.toml or .cargo/device.local.toml"
+             .cargo/config.toml or .cargo/device.local.toml \
+             (run 'cargo device list' to see configured devices)"
         )
     })?;
 

@@ -4,11 +4,21 @@ use crate::device::Device;
 use anyhow::{Context, Result};
 use std::process::Command;
 
-/// Execute the deployed binary on the device over SSH and stream its output locally.
-/// For desktop devices, local execution is not yet implemented (M1).
-pub fn execute(device: &Device, binary_name: &str) -> Result<()> {
+/// Execute the binary on the device, streaming its output locally and forwarding the exit code.
+/// For desktop devices, re-invokes `cargo run` locally (idempotent with the prior build step).
+pub fn execute(device: &Device, binary_name: &str, cargo_args: &[String]) -> Result<()> {
     if device.is_desktop() {
-        anyhow::bail!("local execution for desktop devices is not yet implemented (M1)");
+        tracing::info!("running locally (desktop)");
+        let mut cmd = Command::new("cargo");
+        cmd.args(["run"]).args(cargo_args);
+        let status = cmd.status().context("failed to invoke cargo run")?;
+        if !status.success() {
+            if let Some(code) = status.code() {
+                std::process::exit(code);
+            }
+            anyhow::bail!("local process terminated by signal");
+        }
+        return Ok(());
     }
     let (host, deploy_path) = device.require_ssh()?;
     tracing::info!(%host, %deploy_path, %binary_name, "executing on device via SSH");
