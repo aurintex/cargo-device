@@ -23,6 +23,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 which = "7"
 
 [dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 tempfile = "3"
 
 [lints.rust]
