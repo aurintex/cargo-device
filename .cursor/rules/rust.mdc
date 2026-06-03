@@ -1,0 +1,8 @@
+---
+description: "Rust — reminds Cursor to apply AGENTS.md rules when editing .rs files"
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+Coding rules (anyhow, tracing, no unwrap, doc comments, shell-out) are in [AGENTS.md § Non-Negotiables](../../AGENTS.md).
+Build and lint commands are in [AGENTS.md § Build & Test](../../AGENTS.md).

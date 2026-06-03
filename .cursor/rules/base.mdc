@@ -1,0 +1,10 @@
+---
+description: "cargo-device base — identity and routing"
+globs:
+alwaysApply: true
+---
+
+# cargo-device Base Context
+
+`AGENTS.md` is the canonical source for project identity, principles, and non-negotiables.
+Cursor loads it natively in agent mode; if running as a background agent, read it explicitly first.

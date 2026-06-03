@@ -1,0 +1,30 @@
+[package]
+name = "cargo-device"
+version = "0.1.0"
+edition = "2021"
+description = "Cargo subcommand for cross-compiling, deploying, and running Rust binaries on embedded Linux devices"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/riccip/cargo-device"
+keywords = ["cargo", "embedded", "cross-compile", "deploy", "ssh"]
+categories = ["development-tools", "command-line-utilities"]
+
+[[bin]]
+name = "cargo-device"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+shellexpand = "3"
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+which = "7"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"

@@ -1,0 +1,5 @@
+/target
+.cargo/device.local.toml
+.taskmaster/state.json
+.taskmaster/reports/
+*.env
