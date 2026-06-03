@@ -4,9 +4,18 @@ version = "0.1.0"
 edition = "2021"
 description = "Cargo subcommand for cross-compiling, deploying, and running Rust binaries on embedded Linux devices"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/riccip/cargo-device"
+repository = "https://github.com/aurintex/cargo-device"
+readme = "README.md"
 keywords = ["cargo", "embedded", "cross-compile", "deploy", "ssh"]
 categories = ["development-tools", "command-line-utilities"]
+exclude = [
+    ".cargo-husky/",
+    ".cursor/",
+    ".github/",
+    ".taskmaster/",
+    "AGENTS.md",
+    "CLAUDE.md",
+]
 
 [[bin]]
 name = "cargo-device"
@@ -23,6 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 which = "7"
 
 [dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 tempfile = "3"
 
 [lints.rust]

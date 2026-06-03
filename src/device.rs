@@ -11,11 +11,16 @@ pub struct Device {
     pub linker: Option<String>,
     /// Path to a Yocto/Buildroot SDK environment-setup script.
     pub sdk: Option<String>,
+    pub package: Option<String>,
+    pub binary: Option<String>,
     pub ssh_host: Option<String>,
     /// Path to SSH private key, with `~` expanded.
     pub ssh_key: Option<String>,
+    /// Remote deploy path, with `~` expanded.
     pub deploy_path: Option<String>,
     pub sync_dirs: Vec<String>,
+    pub no_default_features: bool,
+    pub features: Vec<String>,
 }
 
 /// Resolve a device by name from the loaded config, expanding paths and validating required fields.
@@ -23,7 +28,8 @@ pub fn resolve(cfg: &Config, name: &str) -> Result<Device> {
     let raw = cfg.device.get(name).with_context(|| {
         format!(
             "device '{name}' not found — add a [device.{name}] table to \
-                 .cargo/config.toml or .cargo/device.local.toml"
+             .cargo/config.toml or .cargo/device.local.toml \
+             (run 'cargo device list' to see configured devices)"
         )
     })?;
 
@@ -32,10 +38,14 @@ pub fn resolve(cfg: &Config, name: &str) -> Result<Device> {
         target: raw.target.clone(),
         linker: raw.linker.clone(),
         sdk: raw.sdk.clone(),
+        package: raw.package.clone(),
+        binary: raw.binary.clone(),
         ssh_host: raw.ssh_host.clone(),
         ssh_key: raw.ssh_key.as_deref().map(expand_tilde),
-        deploy_path: raw.deploy_path.clone(),
+        deploy_path: raw.deploy_path.as_deref().map(expand_tilde),
         sync_dirs: raw.sync_dirs.clone().unwrap_or_default(),
+        no_default_features: raw.no_default_features.unwrap_or(false),
+        features: raw.features.clone().unwrap_or_default(),
     })
 }
 
@@ -169,5 +179,21 @@ mod tests {
         let key = dev.ssh_key.unwrap();
         assert!(!key.contains('~'), "tilde should be expanded, got: {key}");
         assert!(key.contains("/.ssh/id_rsa"));
+    }
+
+    #[test]
+    fn tilde_in_deploy_path_is_expanded() {
+        let cfg = make_config(
+            "raspi",
+            DeviceConfig {
+                ssh_host: Some("raspi.local".into()),
+                deploy_path: Some("~/myapp".into()),
+                ..Default::default()
+            },
+        );
+        let dev = resolve(&cfg, "raspi").unwrap();
+        let path = dev.deploy_path.unwrap();
+        assert!(!path.contains('~'), "tilde should be expanded, got: {path}");
+        assert!(path.ends_with("/myapp"));
     }
 }
