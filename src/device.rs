@@ -19,6 +19,8 @@ pub struct Device {
     /// Remote deploy path, with `~` expanded.
     pub deploy_path: Option<String>,
     pub sync_dirs: Vec<String>,
+    pub no_default_features: bool,
+    pub features: Vec<String>,
 }
 
 /// Resolve a device by name from the loaded config, expanding paths and validating required fields.
@@ -42,6 +44,8 @@ pub fn resolve(cfg: &Config, name: &str) -> Result<Device> {
         ssh_key: raw.ssh_key.as_deref().map(expand_tilde),
         deploy_path: raw.deploy_path.as_deref().map(expand_tilde),
         sync_dirs: raw.sync_dirs.clone().unwrap_or_default(),
+        no_default_features: raw.no_default_features.unwrap_or(false),
+        features: raw.features.clone().unwrap_or_default(),
     })
 }
 

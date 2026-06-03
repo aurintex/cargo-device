@@ -7,6 +7,6 @@
 [device.radxa]
 target = "aarch64-unknown-linux-gnu"
 linker = "aarch64-linux-gnu-gcc"      # apt: gcc-aarch64-linux-gnu
-ssh_host = "radxa@<YOUR_DEVICE_IP>"   # set real value in device.local.toml
+ssh_host = "<USER>@<DEVICE_IP>"   # set real value in device.local.toml
 ssh_key  = "~/.ssh/id_ed25519"        # set real value in device.local.toml
 deploy_path = "/home/radxa"

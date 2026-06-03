@@ -21,6 +21,30 @@ pub fn has_cargo_package_flag(cargo_args: &[String]) -> bool {
         .any(|a| a == "-p" || a == "--package" || a.starts_with("--package="))
 }
 
+fn has_cargo_flag(cargo_args: &[String], flag: &str) -> bool {
+    cargo_args.iter().any(|a| a == flag)
+}
+
+fn has_features_flag(cargo_args: &[String]) -> bool {
+    cargo_args
+        .iter()
+        .any(|a| a == "--features" || a.starts_with("--features="))
+}
+
+/// Prepend device default cargo flags (`no_default_features`, `features`) when absent.
+pub fn with_default_cargo_args(device: &Device, cargo_args: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    if device.no_default_features && !has_cargo_flag(&cargo_args, "--no-default-features") {
+        out.push("--no-default-features".to_owned());
+    }
+    if !device.features.is_empty() && !has_features_flag(&cargo_args) {
+        out.push("--features".to_owned());
+        out.push(device.features.join(","));
+    }
+    out.extend(cargo_args);
+    out
+}
+
 /// Prepend `-p <package>` when the device defines `package` and the flag is absent.
 pub fn with_package_flag(device: &Device, cargo_args: Vec<String>) -> Vec<String> {
     let Some(pkg) = device.package.as_deref() else {
@@ -78,6 +102,19 @@ mod tests {
             DeviceConfig {
                 package: Some(pkg.to_owned()),
                 binary: bin.map(str::to_owned),
+                ..Default::default()
+            },
+        );
+        resolve(&Config { device: map }, "edge").unwrap()
+    }
+
+    fn device_with_cargo_defaults(no_default_features: bool, features: &[&str]) -> Device {
+        let mut map = HashMap::new();
+        map.insert(
+            "edge".to_owned(),
+            DeviceConfig {
+                no_default_features: Some(no_default_features),
+                features: Some(features.iter().map(|s| (*s).to_owned()).collect()),
                 ..Default::default()
             },
         );
@@ -149,5 +186,48 @@ mod tests {
     fn resolve_binary_falls_back_to_package() {
         let dev = device_with_package("myapp", None);
         assert_eq!(resolve_binary_name(&dev).unwrap(), "myapp");
+    }
+
+    #[test]
+    fn inject_default_features_when_missing() {
+        let dev = device_with_cargo_defaults(true, &["hw_full"]);
+        let out = with_default_cargo_args(&dev, vec!["--release".into()]);
+        assert_eq!(
+            out,
+            vec![
+                "--no-default-features",
+                "--features",
+                "hw_full",
+                "--release"
+            ]
+        );
+    }
+
+    #[test]
+    fn inject_no_default_features_when_user_passes_features_only() {
+        let dev = device_with_cargo_defaults(true, &["hw_full"]);
+        let out = with_default_cargo_args(&dev, vec!["--features".into(), "hw_full".into()]);
+        assert_eq!(out, vec!["--no-default-features", "--features", "hw_full"]);
+    }
+
+    #[test]
+    fn skip_default_features_when_user_overrides() {
+        let dev = device_with_cargo_defaults(true, &["hw_full"]);
+        let out = with_default_cargo_args(&dev, vec!["--features".into(), "mocks".into()]);
+        assert_eq!(out, vec!["--no-default-features", "--features", "mocks"]);
+    }
+
+    #[test]
+    fn skip_injection_when_flags_already_present() {
+        let dev = device_with_cargo_defaults(true, &["hw_full"]);
+        let out = with_default_cargo_args(
+            &dev,
+            vec![
+                "--no-default-features".into(),
+                "--features".into(),
+                "mocks".into(),
+            ],
+        );
+        assert_eq!(out, vec!["--no-default-features", "--features", "mocks"]);
     }
 }

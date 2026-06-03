@@ -80,12 +80,14 @@ fn main() -> Result<()> {
         Command::List => list_devices(&cfg),
         Command::Build { device, cargo_args } => {
             let dev = device::resolve(&cfg, &device)?;
+            let cargo_args = resolve::with_default_cargo_args(&dev, cargo_args);
             let cargo_args = resolve::with_package_flag(&dev, cargo_args);
             build::run(&dev, &cargo_args)?;
         }
         Command::Run { device, cargo_args } => {
             let dev = device::resolve(&cfg, &device)?;
             let (cargo_args, remote_args) = resolve::split_cargo_and_remote(&cargo_args);
+            let cargo_args = resolve::with_default_cargo_args(&dev, cargo_args);
             let cargo_args = resolve::with_package_flag(&dev, cargo_args);
             let is_release = cargo_args.iter().any(|a| a == "--release");
             let bin_name = resolve::resolve_binary_name(&dev)?;

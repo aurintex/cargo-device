@@ -26,6 +26,10 @@ pub struct DeviceConfig {
     pub ssh_key: Option<String>,
     pub deploy_path: Option<String>,
     pub sync_dirs: Option<Vec<String>>,
+    /// When true, prepend `--no-default-features` unless the flag is already present.
+    pub no_default_features: Option<bool>,
+    /// Default `--features` list when the CLI omits `--features`.
+    pub features: Option<Vec<String>>,
 }
 
 impl DeviceConfig {
@@ -41,6 +45,8 @@ impl DeviceConfig {
             ssh_key: other.ssh_key.or(self.ssh_key),
             deploy_path: other.deploy_path.or(self.deploy_path),
             sync_dirs: other.sync_dirs.or(self.sync_dirs),
+            no_default_features: other.no_default_features.or(self.no_default_features),
+            features: other.features.or(self.features),
         }
     }
 }
