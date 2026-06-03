@@ -104,3 +104,111 @@ fn find_cargo_dir() -> Result<std::path::PathBuf> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn make_config(target: &str) -> String {
+        format!("[device.raspi]\ntarget = \"{target}\"\n")
+    }
+
+    #[test]
+    fn merge_other_wins_when_set() {
+        let base = DeviceConfig {
+            ssh_host: Some("base-host".into()),
+            target: Some("base-target".into()),
+            ..Default::default()
+        };
+        let other = DeviceConfig {
+            ssh_host: Some("other-host".into()),
+            ..Default::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.ssh_host.as_deref(), Some("other-host"));
+        assert_eq!(merged.target.as_deref(), Some("base-target"));
+    }
+
+    #[test]
+    fn merge_base_wins_when_other_is_none() {
+        let base = DeviceConfig {
+            ssh_host: Some("base-host".into()),
+            ..Default::default()
+        };
+        let other = DeviceConfig::default();
+        let merged = base.merge(other);
+        assert_eq!(merged.ssh_host.as_deref(), Some("base-host"));
+    }
+
+    #[test]
+    fn merge_both_none_stays_none() {
+        let merged = DeviceConfig::default().merge(DeviceConfig::default());
+        assert!(merged.ssh_host.is_none());
+        assert!(merged.target.is_none());
+    }
+
+    #[test]
+    fn load_file_returns_none_for_missing_file() {
+        let result = load_file("/this/path/does/not/exist/config.toml").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn load_file_parses_valid_toml() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "{}", make_config("aarch64-unknown-linux-gnu")).unwrap();
+        let config = load_file(f.path()).unwrap().unwrap();
+        assert_eq!(
+            config.device["raspi"].target.as_deref(),
+            Some("aarch64-unknown-linux-gnu")
+        );
+    }
+
+    #[test]
+    fn load_file_errors_on_invalid_toml() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        write!(f, "not valid toml ][").unwrap();
+        assert!(load_file(f.path()).is_err());
+    }
+
+    #[test]
+    fn merge_configs_local_overrides_base() {
+        let mut base_map = std::collections::HashMap::new();
+        base_map.insert(
+            "raspi".to_owned(),
+            DeviceConfig {
+                ssh_host: Some("base-host".into()),
+                target: Some("aarch64-unknown-linux-gnu".into()),
+                ..Default::default()
+            },
+        );
+        let mut local_map = std::collections::HashMap::new();
+        local_map.insert(
+            "raspi".to_owned(),
+            DeviceConfig {
+                ssh_host: Some("local-host".into()),
+                ..Default::default()
+            },
+        );
+        let merged = merge_configs(Config { device: base_map }, Config { device: local_map });
+        let dev = &merged.device["raspi"];
+        assert_eq!(dev.ssh_host.as_deref(), Some("local-host"));
+        assert_eq!(dev.target.as_deref(), Some("aarch64-unknown-linux-gnu"));
+    }
+
+    #[test]
+    fn merge_configs_local_only_device_is_added() {
+        let base = Config::default();
+        let mut local_map = std::collections::HashMap::new();
+        local_map.insert(
+            "extra".to_owned(),
+            DeviceConfig {
+                ssh_host: Some("extra-host".into()),
+                ..Default::default()
+            },
+        );
+        let merged = merge_configs(base, Config { device: local_map });
+        assert!(merged.device.contains_key("extra"));
+    }
+}

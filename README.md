@@ -98,7 +98,25 @@ sdk = "/opt/poky/3.4/environment-setup-cortexa72-poky-linux"
 | Neither `sdk` nor `linker` | `cross build` as fallback (requires Docker) |
 | `desktop` or no target | Plain `cargo build` |
 
-`cross` and Docker are a last resort — not the default assumption.
+### Recommended: local linker
+
+The fastest and simplest setup — no Docker, no VM, just a cross-linker on your host:
+
+```bash
+# Debian / Ubuntu
+sudo apt install gcc-aarch64-linux-gnu
+rustup target add aarch64-unknown-linux-gnu
+```
+
+```toml
+[device.raspi]
+target = "aarch64-unknown-linux-gnu"
+linker = "aarch64-linux-gnu-gcc"
+```
+
+`cargo-device` derives `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc` automatically — nothing to configure in `.cargo/config.toml` beyond the two lines above.
+
+`cross` (Docker) is the fallback for cases where the host toolchain isn't available. It is not the default assumption.
 
 ---
 
@@ -119,8 +137,8 @@ warning: ssh_host defined in .cargo/config.toml — consider creating .cargo/dev
 | Milestone | Goal | Status |
 |---|---|---|
 | M0 — Scaffold | Project structure, agent context, module stubs | done |
-| M1 — Core MVP | Config parsing, build backends, deploy, SSH run | in progress |
-| M2 — Polish | `sync`, `list`, `desktop` device, better UX | planned |
+| M1 — Core MVP | Config parsing, build backends, deploy, SSH run | done |
+| M2 — Polish | `list`, `desktop run`, verbosity control | in progress |
 | M3 — Reliability | Integration tests, GitHub Actions CI, `cross` fallback | planned |
 
 ---

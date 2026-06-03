@@ -64,10 +64,10 @@ fn run_with_linker(linker: &str, device: &Device, extra_args: &[String]) -> Resu
     let target = device
         .build_target()
         .context("linker build requires a target to be set in device config")?;
-    let env_var = format!(
-        "CARGO_TARGET_{}_LINKER",
-        target.replace('-', "_").to_uppercase()
-    );
+    which(linker).with_context(|| {
+        format!("linker '{linker}' not found in PATH — install the cross-compilation toolchain")
+    })?;
+    let env_var = linker_env_var(target);
     tracing::info!(%target, %linker, %env_var, "building with local linker");
     Command::new("cargo")
         .arg("build")
@@ -77,6 +77,42 @@ fn run_with_linker(linker: &str, device: &Device, extra_args: &[String]) -> Resu
         .env(&env_var, linker)
         .status()
         .require_success("cargo build")
+}
+
+fn linker_env_var(target: &str) -> String {
+    format!(
+        "CARGO_TARGET_{}_LINKER",
+        target.replace('-', "_").to_uppercase()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linker_env_var_aarch64() {
+        assert_eq!(
+            linker_env_var("aarch64-unknown-linux-gnu"),
+            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER"
+        );
+    }
+
+    #[test]
+    fn linker_env_var_arm_gnueabihf() {
+        assert_eq!(
+            linker_env_var("arm-unknown-linux-gnueabihf"),
+            "CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER"
+        );
+    }
+
+    #[test]
+    fn linker_env_var_x86_64() {
+        assert_eq!(
+            linker_env_var("x86_64-unknown-linux-gnu"),
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"
+        );
+    }
 }
 
 fn run_with_cross(device: &Device, extra_args: &[String]) -> Result<()> {

@@ -22,3 +22,49 @@ impl ExitStatusExt for std::io::Result<ExitStatus> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn require_success_ok_on_zero_exit() {
+        let result = Command::new("true").status().require_success("true");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn require_success_err_on_nonzero_exit() {
+        let result = Command::new("false").status().require_success("false");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("false"),
+            "error should name the command: {msg}"
+        );
+    }
+
+    #[test]
+    fn require_success_err_mentions_exit_status() {
+        let result = Command::new("false").status().require_success("mycommand");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("mycommand"),
+            "error should contain command name: {msg}"
+        );
+    }
+
+    #[test]
+    fn require_success_err_on_io_error() {
+        let result = Command::new("__no_such_binary__")
+            .status()
+            .require_success("__no_such_binary__");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("__no_such_binary__"),
+            "error should name the command: {msg}"
+        );
+    }
+}

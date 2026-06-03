@@ -8,6 +8,49 @@
       "description": "Master task list — see m1-core-mvp tag for active tasks"
     }
   },
+  "m2-polish": {
+    "tasks": [
+      {
+        "id": 1,
+        "title": "Add `cargo device list` subcommand",
+        "description": "Print a table of all configured devices with name, target, and ssh_host.",
+        "details": "Add `List` variant to the `Command` enum in main.rs (no device argument needed). After loading config, iterate config.device and print each entry as a formatted row: name, target (or '—'), ssh_host (or 'local'). Use a simple tab/padded format — no external table crate. Exit cleanly if no devices are configured (print a hint pointing to .cargo/config.toml). Update the error message in device::resolve() to remove the forward-reference to `cargo device list` once this command exists.",
+        "testStrategy": "Manual: create a .cargo/config.toml with two devices and run `cargo device list`. Verify the output contains both device names and their targets.",
+        "priority": "high",
+        "status": "pending",
+        "dependencies": [],
+        "subtasks": []
+      },
+      {
+        "id": 2,
+        "title": "Implement `cargo device run desktop` (local execution)",
+        "description": "When the device is `desktop`, run the binary locally instead of over SSH.",
+        "details": "In run.rs, replace the `anyhow::bail!` stub with an actual local execution: invoke `cargo run` (passing extra_args, including --release if set) via Command::new('cargo'). Inherit stdio. Forward the exit code. The build step in main.rs already runs before execute(), so `cargo run` will re-use the cached build. Note: main.rs currently calls build::run() then deploy::run() (no-op for desktop) then run::execute() — for desktop, calling `cargo run` re-builds (idempotent) but is simpler than locating and invoking the binary directly. Keep it simple.",
+        "testStrategy": "Manual: add a `[device.desktop]` entry to .cargo/config.toml and run `cargo device run desktop`. Verify the binary runs locally with stdout streamed.",
+        "priority": "high",
+        "status": "pending",
+        "dependencies": [1],
+        "subtasks": []
+      },
+      {
+        "id": 3,
+        "title": "Add `--verbose` / `-v` flag for log verbosity",
+        "description": "Let users see debug-level tracing output without setting RUST_LOG manually.",
+        "details": "Add a top-level `--verbose` / `-v` bool flag to the `Cli` struct in main.rs. When set, initialise tracing_subscriber with `tracing::Level::DEBUG` instead of INFO. When not set, keep the current INFO default (or honour RUST_LOG if set). Do not remove the existing env-filter — just adjust the fallback directive. One-liner change in the subscriber init block.",
+        "testStrategy": "Manual: run `cargo device build raspi -v` and verify debug-level lines appear. Run without `-v` and verify they do not.",
+        "priority": "medium",
+        "status": "pending",
+        "dependencies": [],
+        "subtasks": []
+      }
+    ],
+    "metadata": {
+      "created": "2026-06-03",
+      "updated": "2026-06-03",
+      "projectName": "cargo-device",
+      "description": "M2 Polish — list subcommand, desktop run, verbosity control"
+    }
+  },
   "m1-core-mvp": {
     "tasks": [
       {
@@ -17,7 +60,7 @@
         "details": "The config.rs module already has the struct definitions and merge logic. Implement `load()` and `find_cargo_dir()` to walk up from cwd until a .cargo/ directory is found. Parse both TOML files using the toml crate + serde, merge them via the existing `DeviceConfig::merge()` method. Emit a tracing::warn if ssh_host is defined in the base config but no device.local.toml exists.",
         "testStrategy": "Unit test: create a temp dir with a .cargo/config.toml containing a [device.raspi] table, verify load() returns the expected DeviceConfig. Test merging: base has ssh_host=A, local overrides with ssh_host=B, merged result has B. Test missing local file is not an error.",
         "priority": "high",
-        "status": "pending",
+        "status": "done",
         "dependencies": [],
         "subtasks": []
       },
@@ -28,7 +71,7 @@
         "details": "device.rs is already stubbed. Implement `resolve()`: look up the device name in Config::device, return a clear error if not found. Expand `~` in ssh_key using shellexpand::tilde(). The Device struct and `require_ssh()` / `is_desktop()` helpers are already defined. No further changes needed to the struct itself.",
         "testStrategy": "Unit test: resolve a known device name, verify fields are set. Test unknown device name returns an Err with a helpful message. Test ~ expansion in ssh_key. Test is_desktop() returns true for name='desktop'.",
         "priority": "high",
-        "status": "pending",
+        "status": "done",
         "dependencies": [1],
         "subtasks": []
       },
@@ -39,7 +82,7 @@
         "details": "run_native() is already implemented. For run_with_linker(): compute the CARGO_TARGET env var name from the target triple (replace hyphens with underscores, uppercase, add _LINKER suffix). Set it as an env var on the cargo build Command. Pass extra_args and --target to cargo build. Check the exit status and bail! on failure. Use ExitStatusExt from error.rs.",
         "testStrategy": "Manual test: configure a device with linker = 'aarch64-linux-gnu-gcc' and run cargo device build against it, verify cargo is invoked with the correct env var. Unit test: verify the env var name derivation logic for various target triples.",
         "priority": "high",
-        "status": "pending",
+        "status": "done",
         "dependencies": [2],
         "subtasks": []
       },
@@ -50,7 +93,7 @@
         "details": "The SDK env script must be sourced in the same shell that runs cargo. Use a single `sh -c 'source <sdk_path> && cargo build --target <target> <extra_args>'` invocation via Command. Inherit stdio (stdout/stderr visible to user). Check exit status. Warn if sdk path does not exist before attempting to source it.",
         "testStrategy": "Manual test with a real SDK env script if available. Unit test: verify the constructed shell command string is correct for a sample sdk path and target.",
         "priority": "medium",
-        "status": "pending",
+        "status": "done",
         "dependencies": [3],
         "subtasks": []
       },
@@ -61,7 +104,7 @@
         "details": "Locate the binary: find target/<target>/debug|release/<binary_name> (derive binary name from Cargo.toml [package].name). Build the rsync command: `rsync -avz -e 'ssh -i <ssh_key>' <local_binary> <ssh_host>:<deploy_path>/`. Use which('rsync') to verify rsync is available. Inherit stdio. Check exit status. If ssh_key is set, pass -i flag to ssh via -e option.",
         "testStrategy": "Manual test against a real device. Unit test: verify the rsync command arguments are constructed correctly for various configurations (with/without ssh_key).",
         "priority": "high",
-        "status": "pending",
+        "status": "done",
         "dependencies": [2],
         "subtasks": []
       },
@@ -72,7 +115,7 @@
         "details": "For each dir in device.sync_dirs: run `rsync -avz -e 'ssh [-i <key>]' <local_dir>/ <ssh_host>:<deploy_path>/<dir_name>/`. Early-return Ok(()) if sync_dirs is empty (already implemented in stub). Reuse the ssh -e flag logic from copy_binary. Log each directory being synced at tracing::info level.",
         "testStrategy": "Manual test with sync_dirs = ['models/', 'config/']. Verify rsync is called once per directory with correct arguments.",
         "priority": "medium",
-        "status": "pending",
+        "status": "done",
         "dependencies": [5],
         "subtasks": []
       },
@@ -83,7 +126,7 @@
         "details": "Build the ssh command: `ssh [-i <key>] <ssh_host> <deploy_path>/<binary_name>`. Use Command::new('ssh') with .status() (which inherits stdio, giving real-time streaming for free). Forward the exit code: if the remote process exits non-zero, call std::process::exit(code) to mirror it. If ssh itself fails (e.g. host unreachable), return an anyhow error with a clear message.",
         "testStrategy": "Manual test: run cargo device run raspi --release against a real device. Verify stdout is streamed in real time. Verify exit code is forwarded correctly.",
         "priority": "high",
-        "status": "pending",
+        "status": "done",
         "dependencies": [5],
         "subtasks": []
       },
@@ -94,14 +137,14 @@
         "details": "Failures to handle clearly: (1) device not found in config — suggest `cargo device list` (note: not yet implemented). (2) ssh_host missing for run/deploy — current require_ssh() message is already good. (3) linker not in PATH — use which() and add install hint. (4) cross not installed — current message in build.rs is already good. (5) SSH connection refused / host unreachable — detect from exit code and suggest checking ssh_host + network. (6) deploy_path missing — current message is already good. Review all error messages for clarity and actionability.",
         "testStrategy": "Manually trigger each failure scenario and verify the error message is understandable to a developer who hasn't read the source code.",
         "priority": "medium",
-        "status": "pending",
+        "status": "done",
         "dependencies": [7],
         "subtasks": []
       }
     ],
     "metadata": {
       "created": "2026-06-03",
-      "updated": "2026-06-03",
+      "updated": "2026-06-03T-session2",
       "projectName": "cargo-device",
       "description": "M1 Core MVP — config parsing, build backends, deploy, SSH execution"
     }
