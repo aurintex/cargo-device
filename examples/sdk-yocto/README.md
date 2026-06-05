@@ -69,7 +69,7 @@ the script is sourced.
 After building, check the maximum glibc version required:
 
 ```bash
-readelf -V target/aarch64-unknown-linux-gnu/debug/cross-sysroot \
+readelf -V target/aarch64-unknown-linux-gnu/debug/<bin> \
   | grep GLIBC_ | sort -uV | tail
 ```
 

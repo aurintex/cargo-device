@@ -57,10 +57,13 @@ fn run_with_sdk(sdk: &str, device: &Device, extra_args: &[String]) -> Result<()>
     // Source the SDK env script and build in a single shell invocation so env vars
     // set by the script are visible to cargo. Our composable linker/rustflags/env are
     // applied on top via the process environment (visible after the script is sourced).
-    let args_str = extra_args.join(" ");
-    let sh_cmd = format!(". {sdk} && cargo build --target {target} {args_str}");
     let mut cmd = Command::new("sh");
-    cmd.arg("-c").arg(&sh_cmd);
+    cmd.arg("-c")
+        .arg(". \"$SDK_SCRIPT\" && exec cargo build --target \"$TARGET\" \"$@\"")
+        .arg("cargo-device-sdk-build")
+        .args(extra_args)
+        .env("SDK_SCRIPT", sdk)
+        .env("TARGET", target);
     apply_build_env(&mut cmd, device, target, IncludeSysroot::Yes);
     cmd.status().require_success("sh -c (sdk build)")
 }

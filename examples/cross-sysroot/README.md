@@ -13,7 +13,7 @@ glibc keeps **backward** compatibility (a binary built against glibc 2.34 runs o
 but never **forward** compatibility. Link against a newer glibc than the device has and it fails
 at startup:
 
-```
+```text
 ./app: /lib/aarch64-linux-gnu/libc.so.6: version `GLIBC_2.39' not found (required by ./app)
 ```
 
