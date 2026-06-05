@@ -54,6 +54,17 @@ Guidance for AI coding assistants (Claude Code, Cursor, Codex) working in this r
 - **Stay in scope**: fix what was asked; don't refactor unrelated code in the same commit
 - **Concept first**: for non-trivial tasks, verify approach before writing code
 
+## Definition of Done
+
+A task is **done** when all four hold — not before:
+
+1. **Implemented** — code compiles clean (`cargo build`, clippy `-D warnings`, fmt)
+2. **Tests written** — unit or integration tests covering the core behaviour; focus on the 20% of cases that catch 80% of bugs (happy path + the one failure mode most likely to regress); no test padding
+3. **Tests pass** — `cargo test` exits 0 locally
+4. **Docs updated** — README config schema, `///` doc comments on public items, and any relevant hardware/deployment docs reflect the change
+
+What does **not** count as done: compiles but untested; tested but docs are stale; docs updated but tests missing. On-device / integration tests that require physical hardware are exempt — document the gap explicitly (what was tested, what wasn't, how to verify on hardware).
+
 ---
 
 ## Roadmap

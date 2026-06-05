@@ -136,6 +136,37 @@ fn list_command_shows_configured_devices() {
     );
 }
 
+// ── run_source config field ──────────────────────────────────────────────────
+
+#[test]
+fn run_source_config_parses_and_lists_device() {
+    let dir = TempDir::new().unwrap();
+    let cargo = make_cargo_dir(&dir);
+    fs::write(
+        cargo.join("config.toml"),
+        r#"[device.radxa]
+target = "aarch64-unknown-linux-gnu"
+ssh_host = "radxa@192.0.2.1"
+deploy_path = "/home/radxa/app"
+run_source = ["~/ros2_humble/install/setup.bash", "~/ldlidar_ros2_ws/install/setup.bash"]
+"#,
+    )
+    .unwrap();
+
+    // `list` resolves all devices — if run_source fails to parse it would error here.
+    let output = bin().arg("list").current_dir(dir.path()).output().unwrap();
+    assert!(
+        output.status.success(),
+        "list must exit 0 when run_source is set; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("radxa"),
+        "expected 'radxa' in list output: {stdout}"
+    );
+}
+
 // ── local.toml override does not conflict with missing file ──────────────────
 
 #[test]
