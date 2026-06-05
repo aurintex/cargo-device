@@ -39,6 +39,32 @@ Developers currently juggle Python scripts, shell scripts, and manual combinatio
 cargo install cargo-device
 ```
 
+## Agent Setup Prompt
+
+Paste this into Cursor, Claude Code, Codex, or another coding agent from the root of the Rust project you want to run on a device:
+
+```text
+Set up cargo-device for this Rust project.
+
+Work interactively: ask me one question at a time for any value you cannot infer safely. At minimum, confirm:
+- device name (example: raspi)
+- Rust target triple (example: aarch64-unknown-linux-gnu)
+- build backend: local linker, cross/Docker, or SDK script
+- SSH host/user for my machine (keep this out of git)
+- deploy path on the device
+- binary or package name, if this is a workspace or has multiple binaries
+
+Then do the setup:
+1. Install cargo-device with `cargo install cargo-device` if `cargo device --help` is not available.
+2. Install or tell me the missing system dependencies for my OS: `ssh`, `rsync`, the Rust target via `rustup target add <target>`, and either a cross-linker such as `gcc-aarch64-linux-gnu`, `cross`, or the SDK path I gave you.
+3. Create or update `.cargo/config.toml` with a committed `[device.<name>]` config containing portable values only: target, linker/cross/sdk/sysroot/rustflags/env as needed, deploy_path, sync_dirs if useful, package/binary if needed, and optional run_source.
+4. Create or update `.cargo/device.local.toml` with my private machine values such as `ssh_host`, `ssh_key`, local sdk/sysroot paths, or local run_source overrides.
+5. Ensure `.cargo/device.local.toml` is listed in `.gitignore`.
+6. Show me the final config files with secrets redacted, then run `cargo device list` and the safest verification command: `cargo device build <name>` first, then ask before running `cargo device run <name>`.
+
+Keep the setup simple. Prefer a local linker on Linux when available; use `cross = true` only when a local linker/SDK is not practical. Do not hardcode real IPs, hostnames, SSH keys, or private paths into committed files.
+```
+
 ---
 
 ## Quick Start
@@ -55,6 +81,10 @@ cargo device run raspi --release
 
 # Pass arguments to the binary on the device (after --)
 cargo device run raspi --release -- doctor --verbose
+
+# Build and deploy only — no run
+cargo device deploy raspi
+cargo device deploy raspi --release
 
 # Sync directories only — no build, no run
 cargo device sync raspi

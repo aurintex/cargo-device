@@ -50,6 +50,14 @@ enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         cargo_args: Vec<String>,
     },
+    /// Build and deploy to a device without running
+    Deploy {
+        /// Device name as defined in .cargo/config.toml
+        device: String,
+        /// Extra arguments passed through to `cargo build`
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        cargo_args: Vec<String>,
+    },
     /// Sync directories to a device without building or running
     Sync {
         /// Device name as defined in .cargo/config.toml
@@ -98,6 +106,15 @@ fn main() -> Result<()> {
             build::run(&dev, &cargo_args)?;
             deploy::run(&dev, is_release, &bin_name)?;
             run::execute(&dev, &bin_name, &cargo_args, &remote_args)?;
+        }
+        Command::Deploy { device, cargo_args } => {
+            let dev = device::resolve(&cfg, &device)?;
+            let cargo_args = resolve::with_default_cargo_args(&dev, cargo_args);
+            let cargo_args = resolve::with_package_flag(&dev, cargo_args);
+            let is_release = cargo_args.iter().any(|a| a == "--release");
+            let bin_name = resolve::resolve_binary_name(&dev)?;
+            build::run(&dev, &cargo_args)?;
+            deploy::run(&dev, is_release, &bin_name)?;
         }
         Command::Sync { device } => {
             let dev = device::resolve(&cfg, &device)?;

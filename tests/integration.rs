@@ -91,6 +91,50 @@ fn unknown_device_names_it_in_error() {
 }
 
 #[test]
+fn deploy_unknown_device_names_it_in_error() {
+    let dir = TempDir::new().unwrap();
+    let cargo = make_cargo_dir(&dir);
+    fs::write(
+        cargo.join("config.toml"),
+        "[device.raspi]\ntarget = \"aarch64-unknown-linux-gnu\"\n",
+    )
+    .unwrap();
+
+    let output = bin()
+        .args(["deploy", "nonexistent"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nonexistent"),
+        "expected device name in error, got: {stderr}"
+    );
+}
+
+#[test]
+fn deploy_missing_device_error_mentions_config_file() {
+    let dir = TempDir::new().unwrap();
+    let cargo = make_cargo_dir(&dir);
+    fs::write(cargo.join("config.toml"), "[device.raspi]\n").unwrap();
+
+    let output = bin()
+        .args(["deploy", "nope"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("config.toml") || stderr.contains("device.local.toml"),
+        "expected config file mentioned in error, got: {stderr}"
+    );
+}
+
+#[test]
 fn missing_device_error_mentions_config_file() {
     let dir = TempDir::new().unwrap();
     let cargo = make_cargo_dir(&dir);

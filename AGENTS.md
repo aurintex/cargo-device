@@ -17,7 +17,7 @@ Guidance for AI coding assistants (Claude Code, Cursor, Codex) working in this r
 
 ## Project Identity
 
-- **What**: `cargo-device` — a Cargo subcommand (`cargo device build|run|sync <device>`) that cross-compiles, deploys, and runs Rust binaries on embedded Linux devices
+- **What**: `cargo-device` — a Cargo subcommand (`cargo device build|run|deploy|sync <device>`) that cross-compiles, deploys, and runs Rust binaries on embedded Linux devices
 - **Architecture**: single Rust binary (`cargo-device`), installed on the host, invoked by cargo as `cargo device`
 - **Config**: reads `[device.*]` tables from `.cargo/config.toml`; merges per-machine overrides from `.cargo/device.local.toml`
 - **Core principle**: orchestrate existing system tools (`cargo`, `rsync`, `ssh`, `scp`) — do not reimplement protocols in Rust
