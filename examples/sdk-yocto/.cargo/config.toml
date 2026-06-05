@@ -1,0 +1,35 @@
+# Example: cross-compile to an embedded Linux device using a Yocto/Buildroot SDK.
+#
+# The `sdk` field points to a Yocto `environment-setup-*` shell script (or any
+# Buildroot `environment-setup` equivalent). cargo-device sources it in a subshell
+# before invoking `cargo build`, so all the SDK's exported variables (CC, AR,
+# SYSROOT, PKG_CONFIG_SYSROOT_DIR, …) are visible to the build and its build scripts.
+#
+# The `sdk` field composes with `linker`, `sysroot`, `rustflags`, and `env`:
+#   - `linker` overrides the linker after the SDK sets CC/CXX.
+#   - `sysroot` adds `--sysroot` on top of whatever the SDK exports.
+#   - `rustflags` are appended to CARGO_TARGET_<T>_RUSTFLAGS after the SDK.
+#   - `env` sets additional vars on top of what the script exports.
+#
+# Status: documented, not hardware-tested (see examples/cross-sysroot for tested configs).
+#
+# Machine-specific paths (sdk, ssh_host, ssh_key) belong in device.local.toml (gitignored).
+
+[device.desktop]
+# Native build, no deployment.
+
+[device.edge-yocto]
+target = "aarch64-unknown-linux-gnu"
+# Path to the Yocto environment-setup script — set the real path in device.local.toml:
+#   sdk = "/opt/poky/5.0/environment-setup-cortexa72-poky-linux"
+ssh_host = "user@device.local"  # override in device.local.toml
+ssh_key = "~/.ssh/id_ed25519"
+deploy_path = "/home/user/app"
+sync_dirs = ["config/"]
+
+[device.edge-yocto.env]
+# Variables forwarded to build scripts on top of what the SDK exports.
+# Typical Yocto vars the SDK already sets: CC, AR, CFLAGS, LDFLAGS, PKG_CONFIG_SYSROOT_DIR.
+# Only add vars here that the SDK does NOT export, e.g. application-level build hints.
+# MACHINE = "raspberrypi4-64"
+# MY_APP_FEATURE = "camera"

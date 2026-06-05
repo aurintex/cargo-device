@@ -27,10 +27,10 @@ Developers currently juggle Python scripts, shell scripts, and manual combinatio
 |------|-------------|-------|
 | `ssh` (OpenSSH) | `run`, `deploy`, `sync` on remote devices | Pre-installed on macOS and most Linux distros |
 | `rsync` | `deploy`, `sync` on remote devices | `apt install rsync` / `brew install rsync` |
-| `cross` | Build fallback when no `linker` or `sdk` is set | `cargo install cross` (requires Docker) |
+| `cross` | Build when `cross = true` is set | `cargo install cross` (requires Docker) |
 | Cross-linker (e.g. `gcc-aarch64-linux-gnu`) | Build when `linker` is set | Recommended over `cross` — no Docker needed |
 
-`ssh` and `rsync` are detected at runtime; `cargo-device` reports a clear error if a required tool is missing. `cross` is only invoked when neither `sdk` nor `linker` is configured.
+`ssh` and `rsync` are detected at runtime; `cargo-device` reports a clear error if a required tool is missing. `cross` (Docker) is opt-in via `cross = true` — the default for a configured `target` is a plain `cargo build` using your local toolchain (`linker`/`sysroot`/`rustflags`/`env`).
 
 ## Installation
 
@@ -77,13 +77,35 @@ target = "x86_64-unknown-linux-gnu"
 target = "aarch64-unknown-linux-gnu" # Raspberry Pi OS 64-bit
 linker = "aarch64-linux-gnu-gcc"     # optional: local cross-linker installed on host
 # sdk = "/opt/poky/env-setup-..."    # optional: Yocto/Buildroot SDK env script
+# sysroot = "~/sysroots/raspi"       # optional: link against this sysroot (--sysroot)
+# rustflags = ["-C", "link-arg=-Wl,--allow-shlib-undefined"]  # optional: extra rustflags
+# cross = true                       # optional: build via cross (Docker) instead of cargo
 ssh_host = "pi@192.168.1.42"         # override this in device.local.toml
 ssh_key = "~/.ssh/id_ed25519"
 deploy_path = "/tmp/myapp"
 sync_dirs = ["models/", "config/"]   # optional: rsync these directories too
 package = "myapp"                  # optional: workspace crate for `cargo -p`
 binary  = "myapp"                  # optional: deployed binary name (defaults to package)
+
+# optional: build-time environment variables (visible to build scripts)
+[device.raspi.env]
+# AMENT_PREFIX_PATH = "~/ros2_libs"
+# ROS_DISTRO = "humble"
 ```
+
+### Build configuration fields
+
+These fields compose — set as many as your toolchain needs:
+
+| Field | Effect |
+|-------|--------|
+| `target` | Rust target triple; its presence makes the build a cross-compile |
+| `linker` | sets `CARGO_TARGET_<T>_LINKER` (the cross-linker binary) |
+| `sysroot` | adds `-C link-arg=--sysroot=<path>` (link against the target's libs/glibc, not the host's) |
+| `rustflags` | appended to the target-scoped `CARGO_TARGET_<T>_RUSTFLAGS` (does not affect host build scripts) |
+| `env` | environment variables for the build process and its build scripts (`[device.<name>.env]` table) |
+| `sdk` | source a Yocto/Buildroot `environment-setup` script before building (composes with the fields above) |
+| `cross` | `true` → build in Docker via `cross` instead of the local toolchain |
 
 ### Cargo workspaces
 
@@ -116,14 +138,18 @@ sdk = "/opt/poky/3.4/environment-setup-cortexa72-poky-linux"
 
 ## Build Backend
 
-`cargo-device` selects the build backend based on device config:
+`cargo-device` selects the build backend based on device config, evaluated in order:
 
 | Configuration | Backend |
 |---|---|
-| `sdk` defined | Source SDK env script, then `cargo build` |
-| `linker` defined (no sdk) | Set `CARGO_TARGET_*_LINKER`, then `cargo build` |
-| Neither `sdk` nor `linker` | `cross build` as fallback (requires Docker) |
-| `desktop` or no target | Plain `cargo build` |
+| `desktop` or no `target` | Plain `cargo build` |
+| `cross = true` | `cross build` (Docker); `env`/rustflags via `Cross.toml` `env.passthrough` |
+| `sdk` defined | Source SDK env script, then `cargo build` (composing `linker`/`sysroot`/`rustflags`/`env`) |
+| `target` defined | `cargo build --target`, applying `linker`, `sysroot`, `rustflags`, `env` |
+
+> **Breaking change (vs. ≤ 0.1):** a configured `target` with no `linker`/`sdk` no longer
+> silently falls back to `cross`/Docker. It now runs a plain `cargo build --target` using your
+> local toolchain. To keep using Docker, set `cross = true` on the device.
 
 ### Recommended: local linker
 
@@ -143,13 +169,71 @@ linker = "aarch64-linux-gnu-gcc"
 
 `cargo-device` derives `CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc` automatically — nothing to configure in `.cargo/config.toml` beyond the two lines above.
 
-`cross` (Docker) is the fallback for cases where the host toolchain isn't available. It is not the default assumption.
+`cross` (Docker) is opt-in via `cross = true`, for cases where a host toolchain isn't available.
+
+### Matching the target's glibc (avoid `GLIBC_x.yz not found`)
+
+glibc is **backward- but not forward-compatible**: a binary linked against a newer glibc than
+the device has will fail at startup with e.g. `GLIBC_2.39 not found`. A modern host's
+`aarch64-linux-gnu-gcc` (Ubuntu 24.04 → glibc 2.39) overshoots an older device (e.g. Debian 12
+→ glibc 2.36). Two Docker-free fixes, both expressed with the fields above:
+
+**A — Link against a sysroot copied from the device** (exact glibc; also resolves any C/system
+libraries the device has, e.g. ROS 2):
+
+```toml
+[device.edge]
+target  = "aarch64-unknown-linux-gnu"
+linker  = "aarch64-linux-gnu-gcc"       # host apt package
+sysroot = "/abs/path/to/edge-sysroot"   # rsync'd from the device (see examples/cross-sysroot)
+rustflags = [
+    "-C", "link-arg=-Wl,--allow-shlib-undefined",
+    # Multiarch host gcc only: put the sysroot's libc first, else --sysroot is overridden by the
+    # toolchain's built-in -L and you get GLIBC_x.yz-not-found at runtime. See examples/cross-sysroot.
+    "-C", "link-arg=-L/abs/path/to/edge-sysroot/usr/lib/aarch64-linux-gnu",
+    "-C", "link-arg=-Wl,-rpath-link,/abs/path/to/edge-sysroot/usr/lib/aarch64-linux-gnu",
+]
+```
+
+**B — Use a prebuilt toolchain whose bundled glibc is ≤ the device's** (e.g. a
+[Bootlin](https://toolchains.bootlin.com/) SDK):
+
+```toml
+[device.edge-bootlin]
+target  = "aarch64-unknown-linux-gnu"
+linker  = "/opt/aarch64--glibc--stable-2021.11-1/bin/aarch64-buildroot-linux-gnu-gcc"
+sysroot = "/opt/aarch64--glibc--stable-2021.11-1/aarch64-buildroot-linux-gnu/sysroot"
+rustflags = ["-C", "link-arg=-Wl,--allow-shlib-undefined"]
+```
+
+See [`examples/cross-sysroot`](examples/cross-sysroot) for a complete, commented walkthrough
+(including linking external C libraries such as ROS 2 and verifying the result with `readelf`).
+See [Tested configurations](#tested-configurations) for which host/target combinations have been verified.
+
+---
+
+## Tested configurations
+
+The table below shows which host/target/approach combinations have been verified and which
+are expected to work but not yet tested. A binary must require glibc ≤ the device's version;
+verify with `readelf -V <binary> | grep GLIBC_ | sort -uV | tail`.
+
+| Host OS | Target | Approach / fields used | Status |
+|---|---|---|---|
+| Ubuntu 24.04 (gcc 13, glibc 2.39) | aarch64 — Debian 12 (glibc 2.36) | `linker` (host `aarch64-linux-gnu-gcc`) + `sysroot` (rsync'd from device) | ✅ Hardware tested |
+| Ubuntu 24.04 (gcc 13, glibc 2.39) | aarch64 — Debian 12 (glibc 2.36) | `linker` + `sysroot` (Bootlin SDK `2021.11`, glibc 2.34) | ✅ Hardware tested |
+| Ubuntu 24.04 | aarch64 | `cross = true` (Docker) | ✅ Hardware tested |
+| Ubuntu 24.04 | x86_64 (same as host) | `desktop` — native build, no target set | ✅ Tested |
+| Ubuntu/Debian | aarch64 | `linker` only, **no sysroot** | ⚠️ glibc mismatch if host glibc > device's |
+| macOS | aarch64 | `cross = true` (Docker) | 🔲 Expected to work, not tested |
+| Any Linux | armv7 / armhf | `cross = true` (Docker) | 🔲 Expected to work, not tested |
+| Any Linux | armv7 / armhf | `linker` (`arm-linux-gnueabihf-gcc`) + `sysroot` | 🔲 Expected to work, not tested |
 
 ---
 
 ## Config Merge
 
-`device.local.toml` overrides `config.toml` field by field. A missing `device.local.toml` is not an error.
+`device.local.toml` overrides `config.toml` field by field. A missing `device.local.toml` is not an error. The `env` table is the one exception: it merges **per key**, so `config.toml` can hold portable variables (e.g. `ROS_DISTRO`) while `device.local.toml` adds machine-specific ones (e.g. `AMENT_PREFIX_PATH`) without dropping the base.
 
 If `ssh_host` is set in `config.toml` but no `device.local.toml` exists, `cargo device` warns:
 

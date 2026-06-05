@@ -2,6 +2,10 @@
 //!
 //! Invoked by cargo as `cargo device <subcommand>`.
 
+// Test code conventionally uses `.unwrap()` for brevity; allow it there while keeping the
+// lint active for production code.
+#![cfg_attr(test, allow(clippy::unwrap_used))]
+
 mod build;
 mod config;
 mod deploy;

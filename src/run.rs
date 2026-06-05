@@ -42,6 +42,8 @@ pub fn execute(
         "executing on device via SSH"
     );
     let mut cmd = Command::new("ssh");
+    // Allocate a PTY so interactive apps (e.g. ratatui TUI) get a real terminal on the device.
+    cmd.arg("-t");
     if let Some(key) = &device.ssh_key {
         cmd.arg("-i").arg(key);
     }
