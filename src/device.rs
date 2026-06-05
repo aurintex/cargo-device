@@ -2,6 +2,7 @@
 
 use crate::config::Config;
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 
 /// A fully resolved device, ready to use for build, deploy, or run operations.
 #[derive(Debug, Clone)]
@@ -11,6 +12,14 @@ pub struct Device {
     pub linker: Option<String>,
     /// Path to a Yocto/Buildroot SDK environment-setup script.
     pub sdk: Option<String>,
+    /// Sysroot to link against, with `~` expanded.
+    pub sysroot: Option<String>,
+    /// Extra rustflags appended to the target's `CARGO_TARGET_<T>_RUSTFLAGS`.
+    pub rustflags: Vec<String>,
+    /// Build-time environment variables, with `~` expanded in values.
+    pub env: HashMap<String, String>,
+    /// When true, build via `cross` (Docker) instead of plain `cargo`.
+    pub cross: bool,
     pub package: Option<String>,
     pub binary: Option<String>,
     pub ssh_host: Option<String>,
@@ -38,6 +47,16 @@ pub fn resolve(cfg: &Config, name: &str) -> Result<Device> {
         target: raw.target.clone(),
         linker: raw.linker.clone(),
         sdk: raw.sdk.clone(),
+        sysroot: raw.sysroot.as_deref().map(expand_tilde),
+        rustflags: raw.rustflags.clone().unwrap_or_default(),
+        env: raw
+            .env
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, v)| (k, expand_tilde(&v)))
+            .collect(),
+        cross: raw.cross.unwrap_or(false),
         package: raw.package.clone(),
         binary: raw.binary.clone(),
         ssh_host: raw.ssh_host.clone(),
@@ -182,6 +201,53 @@ mod tests {
     }
 
     #[test]
+    fn tilde_in_sysroot_is_expanded() {
+        let cfg = make_config(
+            "radxa",
+            DeviceConfig {
+                sysroot: Some("~/sysroots/radxa".into()),
+                ..Default::default()
+            },
+        );
+        let dev = resolve(&cfg, "radxa").unwrap();
+        let sysroot = dev.sysroot.unwrap();
+        assert!(
+            !sysroot.contains('~'),
+            "tilde should be expanded: {sysroot}"
+        );
+        assert!(sysroot.ends_with("/sysroots/radxa"));
+    }
+
+    #[test]
+    fn tilde_in_env_values_is_expanded_and_keys_preserved() {
+        let mut env = HashMap::new();
+        env.insert("AMENT_PREFIX_PATH".to_owned(), "~/ros2_libs".to_owned());
+        env.insert("ROS_DISTRO".to_owned(), "humble".to_owned());
+        let cfg = make_config(
+            "radxa",
+            DeviceConfig {
+                env: Some(env),
+                ..Default::default()
+            },
+        );
+        let dev = resolve(&cfg, "radxa").unwrap();
+        let ament = &dev.env["AMENT_PREFIX_PATH"];
+        assert!(!ament.contains('~'), "tilde should be expanded: {ament}");
+        assert!(ament.ends_with("/ros2_libs"));
+        assert_eq!(dev.env["ROS_DISTRO"], "humble");
+    }
+
+    #[test]
+    fn cross_defaults_to_false_and_rustflags_to_empty() {
+        let cfg = raspi_config();
+        let dev = resolve(&cfg, "raspi").unwrap();
+        assert!(!dev.cross);
+        assert!(dev.rustflags.is_empty());
+        assert!(dev.env.is_empty());
+        assert!(dev.sysroot.is_none());
+    }
+
+    #[test]
     fn tilde_in_deploy_path_is_expanded() {
         let cfg = make_config(
             "raspi",
@@ -195,5 +261,22 @@ mod tests {
         let path = dev.deploy_path.unwrap();
         assert!(!path.contains('~'), "tilde should be expanded, got: {path}");
         assert!(path.ends_with("/myapp"));
+    }
+
+    #[test]
+    fn resolve_cross_true_from_config() {
+        let cfg = make_config(
+            "edge",
+            DeviceConfig {
+                target: Some("aarch64-unknown-linux-gnu".into()),
+                cross: Some(true),
+                ..Default::default()
+            },
+        );
+        let dev = resolve(&cfg, "edge").unwrap();
+        assert!(
+            dev.cross,
+            "cross: Some(true) in config must resolve to Device.cross == true"
+        );
     }
 }

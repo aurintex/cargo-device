@@ -1,3 +1,6 @@
+// Integration tests use `.unwrap()` throughout; allow it here (lint still active in src/).
+#![allow(clippy::unwrap_used)]
+
 use std::fs;
 use std::process::Command;
 use tempfile::TempDir;
@@ -104,6 +107,32 @@ fn missing_device_error_mentions_config_file() {
     assert!(
         stderr.contains("config.toml") || stderr.contains("device.local.toml"),
         "expected config file mentioned in error, got: {stderr}"
+    );
+}
+
+// ── list subcommand ──────────────────────────────────────────────────────────
+
+#[test]
+fn list_command_shows_configured_devices() {
+    let dir = TempDir::new().unwrap();
+    let cargo = make_cargo_dir(&dir);
+    fs::write(
+        cargo.join("config.toml"),
+        "[device.raspi]\ntarget = \"aarch64-unknown-linux-gnu\"\n\n[device.desktop]\n",
+    )
+    .unwrap();
+
+    let output = bin().arg("list").current_dir(dir.path()).output().unwrap();
+
+    assert!(output.status.success(), "list must exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("raspi"),
+        "expected 'raspi' in list output, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("desktop"),
+        "expected 'desktop' in list output, got: {stdout}"
     );
 }
 

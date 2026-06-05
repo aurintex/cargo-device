@@ -145,6 +145,22 @@ mod tests {
     }
 
     #[test]
+    fn split_no_args_returns_empty_both() {
+        let (cargo, remote) = split_cargo_and_remote(&[]);
+        assert!(cargo.is_empty());
+        assert!(remote.is_empty());
+    }
+
+    #[test]
+    fn split_only_separator_returns_empty_both() {
+        // A bare `--` with nothing on either side: cargo gets nothing, remote gets nothing.
+        let args = vec!["--".into()];
+        let (cargo, remote) = split_cargo_and_remote(&args);
+        assert!(cargo.is_empty(), "cargo side should be empty: {cargo:?}");
+        assert!(remote.is_empty(), "remote side should be empty: {remote:?}");
+    }
+
+    #[test]
     fn package_flag_detected_with_equals_form() {
         assert!(has_cargo_package_flag(&["--package=myapp".into()]));
         assert!(has_cargo_package_flag(&["-p".into(), "myapp".into()]));

@@ -18,6 +18,20 @@ pub struct DeviceConfig {
     pub target: Option<String>,
     pub linker: Option<String>,
     pub sdk: Option<String>,
+    /// Sysroot to link against (with `~` expanded). Added as `--sysroot=<abs>` to the
+    /// target's rustflags so link-time glibc/system libs come from this tree rather than
+    /// the host toolchain's bundled sysroot. Key to matching an older target glibc.
+    pub sysroot: Option<String>,
+    /// Extra rustflags appended to `CARGO_TARGET_<T>_RUSTFLAGS` (target-scoped, so they do
+    /// not leak into host build-script/proc-macro compilation). Each entry is one argument,
+    /// e.g. `["-C", "link-arg=-Wl,--allow-shlib-undefined"]`.
+    pub rustflags: Option<Vec<String>>,
+    /// Build-time environment variables (values have `~` expanded). Applied to the build
+    /// command and visible to build scripts — e.g. `AMENT_PREFIX_PATH`, `ROS_DISTRO`.
+    pub env: Option<HashMap<String, String>>,
+    /// Opt in to building via `cross` (Docker). When unset/false, a configured `target`
+    /// builds with plain `cargo` using `linker`/`sysroot`/`rustflags`/`env`.
+    pub cross: Option<bool>,
     /// Workspace member crate for `cargo -p` (also default binary name when `binary` is unset).
     pub package: Option<String>,
     /// Deployed binary file name (defaults to `package` when unset).
@@ -39,6 +53,13 @@ impl DeviceConfig {
             target: other.target.or(self.target),
             linker: other.linker.or(self.linker),
             sdk: other.sdk.or(self.sdk),
+            sysroot: other.sysroot.or(self.sysroot),
+            rustflags: other.rustflags.or(self.rustflags),
+            // `env` merges per key (unlike other fields, which replace wholesale): the base
+            // table sets portable vars (e.g. ROS_DISTRO) and the local override adds
+            // machine-specific ones (e.g. AMENT_PREFIX_PATH) without dropping the base.
+            env: merge_env(self.env, other.env),
+            cross: other.cross.or(self.cross),
             package: other.package.or(self.package),
             binary: other.binary.or(self.binary),
             ssh_host: other.ssh_host.or(self.ssh_host),
@@ -48,6 +69,20 @@ impl DeviceConfig {
             no_default_features: other.no_default_features.or(self.no_default_features),
             features: other.features.or(self.features),
         }
+    }
+}
+
+/// Merge two optional env tables per key, with `other` winning on key collisions.
+fn merge_env(
+    base: Option<HashMap<String, String>>,
+    other: Option<HashMap<String, String>>,
+) -> Option<HashMap<String, String>> {
+    match (base, other) {
+        (Some(mut base), Some(other)) => {
+            base.extend(other);
+            Some(base)
+        }
+        (base, other) => other.or(base),
     }
 }
 
@@ -177,6 +212,98 @@ mod tests {
     }
 
     #[test]
+    fn merge_cross_toolchain_fields() {
+        let base = DeviceConfig {
+            sysroot: Some("/base/sysroot".into()),
+            rustflags: Some(vec!["-C".into(), "base-flag".into()]),
+            cross: Some(true),
+            ..Default::default()
+        };
+        let other = DeviceConfig {
+            sysroot: Some("/local/sysroot".into()),
+            // rustflags + cross unset in `other` → base wins
+            ..Default::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.sysroot.as_deref(), Some("/local/sysroot"));
+        assert_eq!(
+            merged.rustflags.as_deref(),
+            Some(["-C".to_owned(), "base-flag".to_owned()].as_slice())
+        );
+        assert_eq!(merged.cross, Some(true));
+    }
+
+    #[test]
+    fn merge_env_combines_per_key() {
+        // env merges per key: local adds/overrides keys without dropping base-only keys.
+        let mut base_env = HashMap::new();
+        base_env.insert("ROS_DISTRO".to_owned(), "humble".to_owned());
+        base_env.insert("AMENT_PREFIX_PATH".to_owned(), "/base".to_owned());
+        let mut local_env = HashMap::new();
+        local_env.insert("AMENT_PREFIX_PATH".to_owned(), "/local".to_owned());
+        let base = DeviceConfig {
+            env: Some(base_env),
+            ..Default::default()
+        };
+        let other = DeviceConfig {
+            env: Some(local_env),
+            ..Default::default()
+        };
+        let merged = base.merge(other).env.unwrap();
+        assert_eq!(
+            merged.get("AMENT_PREFIX_PATH").map(String::as_str),
+            Some("/local"),
+            "local overrides on key collision"
+        );
+        assert_eq!(
+            merged.get("ROS_DISTRO").map(String::as_str),
+            Some("humble"),
+            "base-only keys are preserved"
+        );
+    }
+
+    #[test]
+    fn merge_env_keeps_base_when_local_absent() {
+        let mut base_env = HashMap::new();
+        base_env.insert("ROS_DISTRO".to_owned(), "humble".to_owned());
+        let base = DeviceConfig {
+            env: Some(base_env),
+            ..Default::default()
+        };
+        let merged = base.merge(DeviceConfig::default()).env.unwrap();
+        assert_eq!(merged.get("ROS_DISTRO").map(String::as_str), Some("humble"));
+    }
+
+    #[test]
+    fn parse_cross_toolchain_fields_from_toml() {
+        let toml = r#"
+[device.radxa]
+target = "aarch64-unknown-linux-gnu"
+linker = "aarch64-linux-gnu-gcc"
+sysroot = "~/sysroots/radxa"
+rustflags = ["-C", "link-arg=-Wl,--allow-shlib-undefined"]
+cross = false
+
+[device.radxa.env]
+ROS_DISTRO = "humble"
+AMENT_PREFIX_PATH = "~/ros2_libs"
+"#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        let dev = &cfg.device["radxa"];
+        assert_eq!(dev.sysroot.as_deref(), Some("~/sysroots/radxa"));
+        assert_eq!(dev.rustflags.as_ref().unwrap().len(), 2);
+        assert_eq!(dev.cross, Some(false));
+        assert_eq!(
+            dev.env
+                .as_ref()
+                .unwrap()
+                .get("ROS_DISTRO")
+                .map(String::as_str),
+            Some("humble")
+        );
+    }
+
+    #[test]
     fn load_file_returns_none_for_missing_file() {
         let result = load_file("/this/path/does/not/exist/config.toml").unwrap();
         assert!(result.is_none());
@@ -238,5 +365,52 @@ mod tests {
         );
         let merged = merge_configs(base, Config { device: local_map });
         assert!(merged.device.contains_key("extra"));
+    }
+
+    #[test]
+    fn merge_features_array_is_replaced_not_merged() {
+        // `features` (like all Vec fields except `env`) replaces wholesale — only `env` merges per key.
+        let base = DeviceConfig {
+            features: Some(vec!["base-feat".into(), "shared".into()]),
+            ..Default::default()
+        };
+        let other = DeviceConfig {
+            features: Some(vec!["other-feat".into()]),
+            ..Default::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(
+            merged.features.as_deref(),
+            Some(["other-feat".to_owned()].as_slice()),
+            "override features replace base entirely (not appended)"
+        );
+    }
+
+    #[test]
+    fn merge_no_default_features_override() {
+        let base = DeviceConfig {
+            no_default_features: Some(true),
+            ..Default::default()
+        };
+        let other = DeviceConfig {
+            no_default_features: Some(false),
+            ..Default::default()
+        };
+        let merged = base.merge(other);
+        assert_eq!(merged.no_default_features, Some(false));
+    }
+
+    #[test]
+    fn parse_empty_env_table() {
+        // An empty `[device.x.env]` table must parse as `Some(HashMap::new())`, not `None`,
+        // so that merge_env treats it as "explicitly set but empty" rather than "absent".
+        let toml = "[device.x]\n[device.x.env]\n";
+        let cfg: Config = toml::from_str(toml).unwrap();
+        let dev = &cfg.device["x"];
+        assert!(
+            dev.env.is_some(),
+            "empty [device.x.env] should produce Some(empty map), not None"
+        );
+        assert!(dev.env.as_ref().unwrap().is_empty());
     }
 }
