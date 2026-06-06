@@ -1,6 +1,6 @@
 [package]
 name = "cargo-device"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Cargo subcommand for cross-compiling, deploying, and running Rust binaries on embedded Linux devices"
 license = "MIT OR Apache-2.0"

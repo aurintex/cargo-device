@@ -28,6 +28,11 @@ pub struct Device {
     /// Remote deploy path, with `~` expanded.
     pub deploy_path: Option<String>,
     pub sync_dirs: Vec<String>,
+    /// Scripts to `source` on the run host before exec'ing the binary (run-time only).
+    /// Deliberately NOT tilde-expanded (unlike `sysroot`/`ssh_key`/`deploy_path`): these
+    /// scripts live on the *run host's* filesystem, where `~` is the remote user's home
+    /// (e.g. `/home/radxa`), not the local one. Expansion is left to the run-host shell.
+    pub run_source: Vec<String>,
     pub no_default_features: bool,
     pub features: Vec<String>,
 }
@@ -63,6 +68,8 @@ pub fn resolve(cfg: &Config, name: &str) -> Result<Device> {
         ssh_key: raw.ssh_key.as_deref().map(expand_tilde),
         deploy_path: raw.deploy_path.as_deref().map(expand_tilde),
         sync_dirs: raw.sync_dirs.clone().unwrap_or_default(),
+        // Not tilde-expanded: these paths are resolved on the run host, not locally.
+        run_source: raw.run_source.clone().unwrap_or_default(),
         no_default_features: raw.no_default_features.unwrap_or(false),
         features: raw.features.clone().unwrap_or_default(),
     })
@@ -261,6 +268,30 @@ mod tests {
         let path = dev.deploy_path.unwrap();
         assert!(!path.contains('~'), "tilde should be expanded, got: {path}");
         assert!(path.ends_with("/myapp"));
+    }
+
+    #[test]
+    fn run_source_is_not_tilde_expanded() {
+        // run_source paths are resolved on the run host, so `~` must survive resolve()
+        // untouched (expanding it locally would point at the wrong, local, home).
+        let cfg = make_config(
+            "radxa",
+            DeviceConfig {
+                run_source: Some(vec![
+                    "~/ros2_humble/install/setup.bash".into(),
+                    "/opt/ros/humble/setup.bash".into(),
+                ]),
+                ..Default::default()
+            },
+        );
+        let dev = resolve(&cfg, "radxa").unwrap();
+        assert_eq!(dev.run_source[0], "~/ros2_humble/install/setup.bash");
+        assert!(
+            dev.run_source[0].contains('~'),
+            "tilde must NOT be expanded for run_source: {}",
+            dev.run_source[0]
+        );
+        assert_eq!(dev.run_source[1], "/opt/ros/humble/setup.bash");
     }
 
     #[test]

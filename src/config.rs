@@ -40,6 +40,13 @@ pub struct DeviceConfig {
     pub ssh_key: Option<String>,
     pub deploy_path: Option<String>,
     pub sync_dirs: Option<Vec<String>>,
+    /// Scripts to `source` on the run host immediately before exec'ing the binary
+    /// (run-time only — orthogonal to the build-time `env`/`sdk` fields). Paths are
+    /// interpreted on the *run host* (the device for SSH runs, the local machine for the
+    /// `desktop` device), so `~` is left for that shell to expand and is NOT expanded
+    /// locally at resolve time. Listed in source order, e.g. underlay before overlay:
+    /// `["~/ros2_humble/install/setup.bash", "~/ldlidar_ros2_ws/install/setup.bash"]`.
+    pub run_source: Option<Vec<String>>,
     /// When true, prepend `--no-default-features` unless the flag is already present.
     pub no_default_features: Option<bool>,
     /// Default `--features` list when the CLI omits `--features`.
@@ -66,6 +73,7 @@ impl DeviceConfig {
             ssh_key: other.ssh_key.or(self.ssh_key),
             deploy_path: other.deploy_path.or(self.deploy_path),
             sync_dirs: other.sync_dirs.or(self.sync_dirs),
+            run_source: other.run_source.or(self.run_source),
             no_default_features: other.no_default_features.or(self.no_default_features),
             features: other.features.or(self.features),
         }
@@ -398,6 +406,57 @@ AMENT_PREFIX_PATH = "~/ros2_libs"
         };
         let merged = base.merge(other);
         assert_eq!(merged.no_default_features, Some(false));
+    }
+
+    #[test]
+    fn parse_run_source_from_toml() {
+        let toml = r#"
+[device.radxa]
+run_source = ["~/ros2_humble/install/setup.bash", "~/ldlidar_ros2_ws/install/setup.bash"]
+"#;
+        let cfg: Config = toml::from_str(toml).unwrap();
+        let dev = &cfg.device["radxa"];
+        let src = dev.run_source.as_deref().unwrap();
+        assert_eq!(src.len(), 2);
+        assert_eq!(src[0], "~/ros2_humble/install/setup.bash");
+        assert_eq!(src[1], "~/ldlidar_ros2_ws/install/setup.bash");
+    }
+
+    #[test]
+    fn merge_run_source_replaced_by_local() {
+        // run_source, like features/sync_dirs, replaces wholesale when local overrides it.
+        let base = DeviceConfig {
+            run_source: Some(vec!["~/base/setup.bash".into()]),
+            ..Default::default()
+        };
+        let local = DeviceConfig {
+            run_source: Some(vec!["~/local/setup.bash".into(), "~/local/ws.bash".into()]),
+            ..Default::default()
+        };
+        let merged = base.merge(local);
+        assert_eq!(
+            merged.run_source.as_deref(),
+            Some(
+                [
+                    "~/local/setup.bash".to_owned(),
+                    "~/local/ws.bash".to_owned()
+                ]
+                .as_slice()
+            ),
+        );
+    }
+
+    #[test]
+    fn merge_run_source_base_kept_when_local_absent() {
+        let base = DeviceConfig {
+            run_source: Some(vec!["~/base/setup.bash".into()]),
+            ..Default::default()
+        };
+        let merged = base.merge(DeviceConfig::default());
+        assert_eq!(
+            merged.run_source.as_deref(),
+            Some(["~/base/setup.bash".to_owned()].as_slice()),
+        );
     }
 
     #[test]

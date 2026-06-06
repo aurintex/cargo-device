@@ -14,6 +14,7 @@ There is no unified workflow in Rust for:
 - Deploying the compiled binary to the device via SSH/rsync
 - Running it with local stdout/stderr
 - Syncing additional artifacts (models, configs, assets)
+- Sourcing a runtime environment on the device before the binary starts (e.g. ROS 2 `setup.bash`, Yocto SDK activation, or any shell environment that sets `LD_LIBRARY_PATH` / `PATH`)
 
 Developers currently juggle Python scripts, shell scripts, and manual combinations of `cross`, `scp`, and `ssh`. This is error-prone, not reusable, and hard for agents to automate.
 
@@ -38,6 +39,32 @@ Developers currently juggle Python scripts, shell scripts, and manual combinatio
 cargo install cargo-device
 ```
 
+## Agent Setup Prompt
+
+Paste this into Cursor, Claude Code, Codex, or another coding agent from the root of the Rust project you want to run on a device:
+
+```text
+Set up cargo-device for this Rust project.
+
+Work interactively: ask me one question at a time for any value you cannot infer safely. At minimum, confirm:
+- device name (example: raspi)
+- Rust target triple (example: aarch64-unknown-linux-gnu)
+- build backend: local linker, cross/Docker, or SDK script
+- SSH host/user for my machine (keep this out of git)
+- deploy path on the device
+- binary or package name, if this is a workspace or has multiple binaries
+
+Then do the setup:
+1. Install cargo-device with `cargo install cargo-device` if `cargo device --help` is not available.
+2. Install or tell me the missing system dependencies for my OS: `ssh`, `rsync`, the Rust target via `rustup target add <target>`, and either a cross-linker such as `gcc-aarch64-linux-gnu`, `cross`, or the SDK path I gave you.
+3. Create or update `.cargo/config.toml` with a committed `[device.<name>]` config containing portable values only: target, linker/cross/sdk/sysroot/rustflags/env as needed, deploy_path, sync_dirs if useful, package/binary if needed, and optional run_source.
+4. Create or update `.cargo/device.local.toml` with my private machine values such as `ssh_host`, `ssh_key`, local sdk/sysroot paths, or local run_source overrides.
+5. Ensure `.cargo/device.local.toml` is listed in `.gitignore`.
+6. Show me the final config files with secrets redacted, then run `cargo device list` and the safest verification command: `cargo device build <name>` first, then ask before running `cargo device run <name>`.
+
+Keep the setup simple. Prefer a local linker on Linux when available; use `cross = true` only when a local linker/SDK is not practical. Do not hardcode real IPs, hostnames, SSH keys, or private paths into committed files.
+```
+
 ---
 
 ## Quick Start
@@ -52,15 +79,30 @@ cargo device build raspi --release --bin myapp
 cargo device run raspi
 cargo device run raspi --release
 
+# Pass arguments to the binary on the device (after --)
+cargo device run raspi --release -- doctor --verbose
+
+# Build and deploy only — no run
+cargo device deploy raspi
+cargo device deploy raspi --release
+
 # Sync directories only — no build, no run
 cargo device sync raspi
+
+# List all configured devices
+cargo device list
 
 # Desktop (plain cargo build/run, no deploy)
 cargo device build desktop
 cargo device run desktop
+
+# Show debug-level log output (SSH command, rsync invocations, etc.)
+cargo device -v run raspi
 ```
 
 Unknown flags and arguments are forwarded directly to `cargo build` / `cargo run`.
+
+For devices that need a runtime environment (e.g. ROS 2), add `run_source` to the device config — `cargo device run` will source those scripts on the device before starting the binary. See [Run-time environment](#run-time-environment).
 
 ---
 
@@ -86,6 +128,8 @@ deploy_path = "/tmp/myapp"
 sync_dirs = ["models/", "config/"]   # optional: rsync these directories too
 package = "myapp"                  # optional: workspace crate for `cargo -p`
 binary  = "myapp"                  # optional: deployed binary name (defaults to package)
+# optional: source these scripts on the run host before the binary starts (run-time only)
+# run_source = ["~/ros2_humble/install/setup.bash", "~/ldlidar_ros2_ws/install/setup.bash"]
 
 # optional: build-time environment variables (visible to build scripts)
 [device.raspi.env]
@@ -106,6 +150,21 @@ These fields compose — set as many as your toolchain needs:
 | `env` | environment variables for the build process and its build scripts (`[device.<name>.env]` table) |
 | `sdk` | source a Yocto/Buildroot `environment-setup` script before building (composes with the fields above) |
 | `cross` | `true` → build in Docker via `cross` instead of the local toolchain |
+
+### Run-time environment
+
+| Field | Effect |
+|-------|--------|
+| `run_source` | scripts to `source` on the **run host** immediately before the binary starts, in order — e.g. `["~/ros2_humble/install/setup.bash", "~/ldlidar_ros2_ws/install/setup.bash"]` |
+
+`run_source` is the run-time counterpart to the build-time `env`/`sdk` fields: those set up the *build*, `run_source` sets up the *run*. The remote command becomes:
+```sh
+cd <deploy_path> && . <script1> && . <script2> && exec ./<binary> [args]
+```
+
+For the `desktop` device the same scripts are sourced in a local shell. Paths are resolved on the **run host**, so a leading `~/` expands to the device user's home — not yours. List them as they exist on the target.
+
+This is the standard approach for embedded Linux runtimes that require environment setup before anything works (ROS 2, Yocto SDK activation, conda environments). Tested on a Radxa Rock 5C (Debian 12) with a ROS 2 Humble binary that links against `rclrs`: without sourcing the binary exits immediately with a dynamic-linker error; with `run_source` it starts clean and all expected env vars (`ROS_DISTRO`, `AMENT_PREFIX_PATH`, `LD_LIBRARY_PATH`) are set.
 
 ### Cargo workspaces
 
@@ -233,7 +292,11 @@ verify with `readelf -V <binary> | grep GLIBC_ | sort -uV | tail`.
 
 ## Config Merge
 
-`device.local.toml` overrides `config.toml` field by field. A missing `device.local.toml` is not an error. The `env` table is the one exception: it merges **per key**, so `config.toml` can hold portable variables (e.g. `ROS_DISTRO`) while `device.local.toml` adds machine-specific ones (e.g. `AMENT_PREFIX_PATH`) without dropping the base.
+`device.local.toml` overrides `config.toml` field by field. A missing `device.local.toml` is not an error.
+
+Most fields replace wholesale when overridden (`target`, `linker`, `sysroot`, `run_source`, `sync_dirs`, `features`, …). The `env` table is the exception: it merges **per key**, so `config.toml` can hold portable variables (e.g. `ROS_DISTRO`) while `device.local.toml` adds machine-specific ones (e.g. `AMENT_PREFIX_PATH`) without dropping the base.
+
+`run_source` replaces wholesale — if `device.local.toml` defines it, the entire list from `config.toml` is replaced. This is intentional: different machines may need different sourcing paths.
 
 If `ssh_host` is set in `config.toml` but no `device.local.toml` exists, `cargo device` warns:
 
@@ -249,7 +312,7 @@ warning: ssh_host defined in .cargo/config.toml — consider creating .cargo/dev
 |---|---|---|
 | M0 — Scaffold | Project structure, agent context, module stubs | done |
 | M1 — Core MVP | Config parsing, build backends, deploy, SSH run | done |
-| M2 — Polish | `list`, `desktop run`, verbosity control | in progress |
+| M2 — Polish | `list`, `desktop run`, verbosity control, `run_source` | done |
 | M3 — Reliability | Integration tests, GitHub Actions CI, `cross` fallback | planned |
 
 ---
