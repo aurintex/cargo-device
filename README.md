@@ -97,7 +97,7 @@ cargo device build desktop
 cargo device run desktop
 
 # Show debug-level log output (SSH command, rsync invocations, etc.)
-cargo device run raspi -v
+cargo device -v run raspi
 ```
 
 Unknown flags and arguments are forwarded directly to `cargo build` / `cargo run`.
@@ -158,8 +158,7 @@ These fields compose — set as many as your toolchain needs:
 | `run_source` | scripts to `source` on the **run host** immediately before the binary starts, in order — e.g. `["~/ros2_humble/install/setup.bash", "~/ldlidar_ros2_ws/install/setup.bash"]` |
 
 `run_source` is the run-time counterpart to the build-time `env`/`sdk` fields: those set up the *build*, `run_source` sets up the *run*. The remote command becomes:
-
-```
+```sh
 cd <deploy_path> && . <script1> && . <script2> && exec ./<binary> [args]
 ```
 
