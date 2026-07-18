@@ -55,7 +55,7 @@ pub fn sync_dirs(device: &Device) -> Result<()> {
         let dst = format!("{host}:{deploy_path}/{dir_name}");
         tracing::info!(%src, %dst, "syncing directory");
         let mut cmd = Command::new("rsync");
-        cmd.arg("-avz");
+        cmd.arg("-avz").arg("--mkpath");
         if let Some(key) = &device.ssh_key {
             cmd.arg("-e").arg(format!("ssh -i {key}"));
         }
