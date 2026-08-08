@@ -6,13 +6,15 @@
 
 /// Quote a string so a POSIX shell reads it as a single literal word.
 ///
-/// Plain paths and flags are returned unchanged; anything else is single-quoted with
+/// Plain paths and flags are returned unchanged; anything else — including the empty
+/// string, which the remote shell would otherwise drop from argv — is single-quoted with
 /// embedded single quotes escaped. A `~` is *not* special-cased here — it is quoted like
 /// any other character, so use [`remote_path_token`] for paths that should expand
 /// against the remote user's home.
 pub fn shell_escape(s: &str) -> String {
-    if s.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"-_./:".contains(&b))
+    if !s.is_empty()
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./:".contains(&b))
     {
         s.to_owned()
     } else {
@@ -43,6 +45,12 @@ mod tests {
     fn shell_escape_plain_paths_unchanged() {
         assert_eq!(shell_escape("/opt/myapp"), "/opt/myapp");
         assert_eq!(shell_escape("myapp-v2.0"), "myapp-v2.0");
+    }
+
+    #[test]
+    fn shell_escape_empty_string_survives_as_a_word() {
+        // An unquoted empty token would vanish from the remote argv.
+        assert_eq!(shell_escape(""), "''");
     }
 
     #[test]

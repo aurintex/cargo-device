@@ -15,6 +15,7 @@
 use crate::device::Device;
 use crate::error::ExitStatusExt;
 use anyhow::{Context, Result};
+use std::path::Path;
 use std::process::Command;
 use which::which;
 
@@ -184,6 +185,10 @@ fn warn_if_cross_toolchain_missing() {
     let Ok(output) = Command::new("rustup").args(["toolchain", "list"]).output() else {
         return;
     };
+    if !output.status.success() {
+        // A failed listing means an empty stdout, not an absent toolchain — stay quiet.
+        return;
+    }
     let installed = String::from_utf8_lossy(&output.stdout)
         .lines()
         .any(|line| line.split_whitespace().next() == Some(wanted.as_str()));
@@ -197,22 +202,32 @@ fn warn_if_cross_toolchain_missing() {
     );
 }
 
-/// The toolchain channel `cross` will request: the project's `rust-toolchain.toml` /
-/// `rust-toolchain` pin if present, otherwise the active rustup default.
+/// The toolchain channel `cross` will request: the project's `rust-toolchain` /
+/// `rust-toolchain.toml` pin if present, otherwise the active rustup default.
 fn cross_channel() -> Option<String> {
-    for file in ["rust-toolchain.toml", "rust-toolchain"] {
-        if let Ok(text) = std::fs::read_to_string(file) {
-            if let Some(channel) = parse_toolchain_channel(&text) {
-                return Some(channel);
-            }
-            // Legacy one-line form: the file *is* the channel name.
-            let line = text.trim();
-            if !line.is_empty() && !line.contains('\n') {
-                return Some(line.to_owned());
-            }
+    channel_from_toolchain_file(Path::new(".")).or_else(active_toolchain_channel)
+}
+
+/// Read the pinned channel from a toolchain file in `dir`, mirroring rustup's precedence.
+///
+/// When both files exist rustup uses the extensionless `rust-toolchain` "for backwards
+/// compatibility" and ignores `rust-toolchain.toml`, so read it first — otherwise a
+/// project carrying both would be warned about the wrong channel.
+fn channel_from_toolchain_file(dir: &Path) -> Option<String> {
+    for file in ["rust-toolchain", "rust-toolchain.toml"] {
+        let Ok(text) = std::fs::read_to_string(dir.join(file)) else {
+            continue;
+        };
+        if let Some(channel) = parse_toolchain_channel(&text) {
+            return Some(channel);
+        }
+        // Legacy one-line form: the file *is* the channel name.
+        let line = text.trim();
+        if !line.is_empty() && !line.contains('\n') {
+            return Some(line.to_owned());
         }
     }
-    active_toolchain_channel()
+    None
 }
 
 /// Extract `[toolchain] channel` from a `rust-toolchain.toml`.
@@ -289,6 +304,42 @@ mod tests {
             rustflags_env_var("aarch64-unknown-linux-gnu"),
             "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS"
         );
+    }
+
+    #[test]
+    fn legacy_toolchain_file_wins_over_toml() {
+        // rustup uses the extensionless file when both exist; match that precedence.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rust-toolchain"), "1.75.0\n").unwrap();
+        std::fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.88.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            channel_from_toolchain_file(dir.path()).as_deref(),
+            Some("1.75.0")
+        );
+    }
+
+    #[test]
+    fn toolchain_toml_is_read_when_it_is_the_only_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.88.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            channel_from_toolchain_file(dir.path()).as_deref(),
+            Some("1.88.0")
+        );
+    }
+
+    #[test]
+    fn no_toolchain_file_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(channel_from_toolchain_file(dir.path()), None);
     }
 
     #[test]

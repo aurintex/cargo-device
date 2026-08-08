@@ -26,7 +26,7 @@ Developers currently juggle Python scripts, shell scripts, and manual combinatio
 
 | Tool | Required for | Notes |
 |------|-------------|-------|
-| `ssh` (OpenSSH) | `run`, `deploy`, `sync` on remote devices | Pre-installed on macOS, most Linux distros, and Windows 10/11 |
+| `ssh` (OpenSSH) | `run`, `deploy`, `sync` on remote devices | Pre-installed on macOS and most Linux distros; on Windows 10/11 the OpenSSH Client is an optional feature that may need enabling — see [Windows](#windows) |
 | `sftp` (OpenSSH) | `deploy`, `sync` when `transport = "sftp"` | Ships with the same OpenSSH suite as `ssh` — no extra install |
 | `rsync` | `deploy`, `sync` when `transport = "rsync"` | `apt install rsync` / `brew install rsync`; optional — see [File transport](#file-transport) |
 | `cross` | Build when `cross = true` is set | `cargo install cross` (requires Docker) |
@@ -234,7 +234,7 @@ sdk = "/opt/poky/3.4/environment-setup-cortexa72-poky-linux"
 
 ### .gitignore
 
-```
+```text
 .cargo/device.local.toml
 ```
 
@@ -321,12 +321,20 @@ See [Tested configurations](#tested-configurations) for which host/target combin
 Windows hosts are supported and tested — no WSL, MSYS2, or Cygwin needed. Two pieces make
 it work:
 
-- **Transfer** uses `sftp` from the built-in OpenSSH client, because Windows has no
-  `rsync`. With the default `transport = "auto"` this happens automatically.
+- **Transfer** uses `sftp` from the OpenSSH client whenever `rsync` is unavailable, which
+  on Windows it normally is. With the default `transport = "auto"` this happens
+  automatically; an `rsync` that *is* on `PATH` (MSYS2, Cygwin) still wins.
 - **Cross-compilation** uses `cross` (Docker Desktop), because host cross-linkers such as
   `gcc-aarch64-linux-gnu` are Linux packages. Prebuilt Linux SDKs (Bootlin, Yocto) are
   ELF binaries and cannot run on a Windows host either, so `linker`/`sdk` are Linux/macOS
   options only.
+
+Both transports need the OpenSSH **client**, which Windows 10/11 ship as an optional
+feature rather than a guaranteed install. If `ssh` is not found, add it once:
+
+```powershell
+Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0
+```
 
 ```toml
 [device.edge]
@@ -350,7 +358,7 @@ cargo device run edge
 That home records a Windows host triple, so rustup refuses to add the Linux toolchain and
 suggests `rustup target add`, which does not fix it:
 
-```
+```text
 error: toolchain 'stable-x86_64-unknown-linux-gnu' may not be able to run on this system
 ```
 
@@ -427,7 +435,7 @@ Per-machine fields belong in `device.local.toml`: `transport`, `ssh_program`, an
 
 If `ssh_host` is set in `config.toml` but no `device.local.toml` exists, `cargo device` warns:
 
-```
+```text
 warning: ssh_host defined in .cargo/config.toml — consider creating .cargo/device.local.toml to override for your machine
 ```
 
