@@ -28,26 +28,42 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// A shell command that exits with `code`. `true`/`false` are not available on
+    /// Windows, so route through the platform shell instead.
+    fn exit_with(code: i32) -> Command {
+        let mut cmd = if cfg!(windows) {
+            let mut c = Command::new("cmd");
+            c.arg("/C");
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c");
+            c
+        };
+        cmd.arg(format!("exit {code}"));
+        cmd
+    }
+
     #[test]
     fn require_success_ok_on_zero_exit() {
-        let result = Command::new("true").status().require_success("true");
+        let result = exit_with(0).status().require_success("exit-0");
         assert!(result.is_ok());
     }
 
     #[test]
     fn require_success_err_on_nonzero_exit() {
-        let result = Command::new("false").status().require_success("false");
+        let result = exit_with(1).status().require_success("exit-1");
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
-            msg.contains("false"),
+            msg.contains("exit-1"),
             "error should name the command: {msg}"
         );
     }
 
     #[test]
     fn require_success_err_mentions_exit_status() {
-        let result = Command::new("false").status().require_success("mycommand");
+        let result = exit_with(1).status().require_success("mycommand");
         let msg = result.unwrap_err().to_string();
         assert!(
             msg.contains("mycommand"),

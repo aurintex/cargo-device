@@ -15,6 +15,7 @@
 use crate::device::Device;
 use crate::error::ExitStatusExt;
 use anyhow::{Context, Result};
+use std::path::Path;
 use std::process::Command;
 use which::which;
 
@@ -162,7 +163,111 @@ fn run_with_cross(device: &Device, extra_args: &[String]) -> Result<()> {
     // values and rustflags are set on the host; list them in `Cross.toml` env.passthrough
     // (e.g. `AMENT_PREFIX_PATH`, `ROS_DISTRO`, `CARGO_TARGET_<T>_RUSTFLAGS`) to reach the build.
     apply_build_env(&mut cmd, device, target, IncludeSysroot::No);
+    warn_if_cross_toolchain_missing();
     cmd.status().require_success("cross build")
+}
+
+/// Windows hosts only: warn when the Linux toolchain `cross` needs is not installed.
+///
+/// `cross` mounts the host's rustup home into its Linux container and runs `rustup
+/// toolchain add <channel>-x86_64-unknown-linux-gnu` there. Because that rustup home
+/// records a Windows host, rustup refuses with *"may not be able to run on this system"*
+/// and suggests `rustup target add` — which does not help. Checking up-front lets us name
+/// the command that does. Best-effort: any uncertainty means staying quiet.
+fn warn_if_cross_toolchain_missing() {
+    if !cfg!(windows) {
+        return;
+    }
+    let Some(channel) = cross_channel() else {
+        return;
+    };
+    let wanted = format!("{channel}-x86_64-unknown-linux-gnu");
+    let Ok(output) = Command::new("rustup").args(["toolchain", "list"]).output() else {
+        return;
+    };
+    if !output.status.success() {
+        // A failed listing means an empty stdout, not an absent toolchain — stay quiet.
+        return;
+    }
+    let installed = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.split_whitespace().next() == Some(wanted.as_str()));
+    if installed {
+        return;
+    }
+    tracing::warn!(
+        "`cross` needs the {wanted} toolchain, which is not installed. rustup will refuse \
+         to add it from inside the container (\"may not be able to run on this system\"). \
+         Install it first:\n  rustup toolchain install {wanted} --profile minimal --force-non-host"
+    );
+}
+
+/// The toolchain channel `cross` will request: the project's `rust-toolchain` /
+/// `rust-toolchain.toml` pin if present, otherwise the active rustup default.
+fn cross_channel() -> Option<String> {
+    channel_from_toolchain_file(Path::new(".")).or_else(active_toolchain_channel)
+}
+
+/// Read the pinned channel from a toolchain file in `dir`, mirroring rustup's precedence.
+///
+/// When both files exist rustup uses the extensionless `rust-toolchain` "for backwards
+/// compatibility" and ignores `rust-toolchain.toml`, so read it first — otherwise a
+/// project carrying both would be warned about the wrong channel.
+fn channel_from_toolchain_file(dir: &Path) -> Option<String> {
+    for file in ["rust-toolchain", "rust-toolchain.toml"] {
+        let Ok(text) = std::fs::read_to_string(dir.join(file)) else {
+            continue;
+        };
+        if let Some(channel) = parse_toolchain_channel(&text) {
+            return Some(channel);
+        }
+        // Legacy one-line form: the file *is* the channel name.
+        let line = text.trim();
+        if !line.is_empty() && !line.contains('\n') {
+            return Some(line.to_owned());
+        }
+    }
+    None
+}
+
+/// Extract `[toolchain] channel` from a `rust-toolchain.toml`.
+fn parse_toolchain_channel(text: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct File {
+        toolchain: Option<Section>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Section {
+        channel: Option<String>,
+    }
+    toml::from_str::<File>(text).ok()?.toolchain?.channel
+}
+
+/// `rustup show active-toolchain` prints e.g. `stable-x86_64-pc-windows-msvc (default)`;
+/// strip the host triple to get back the bare channel.
+fn active_toolchain_channel() -> Option<String> {
+    let output = Command::new("rustup")
+        .args(["show", "active-toolchain"])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let name = stdout.split_whitespace().next()?;
+    strip_windows_host_triple(name).map(str::to_owned)
+}
+
+/// Strip a Windows host triple suffix from a toolchain name. `None` when the name does not
+/// end in one — this only runs on Windows, so anything else means we guessed wrong and
+/// should stay quiet rather than print a misleading command.
+fn strip_windows_host_triple(name: &str) -> Option<&str> {
+    [
+        "-x86_64-pc-windows-msvc",
+        "-aarch64-pc-windows-msvc",
+        "-i686-pc-windows-msvc",
+        "-x86_64-pc-windows-gnu",
+        "-i686-pc-windows-gnu",
+    ]
+    .iter()
+    .find_map(|triple| name.strip_suffix(triple))
 }
 
 #[cfg(test)]
@@ -198,6 +303,78 @@ mod tests {
         assert_eq!(
             rustflags_env_var("aarch64-unknown-linux-gnu"),
             "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS"
+        );
+    }
+
+    #[test]
+    fn legacy_toolchain_file_wins_over_toml() {
+        // rustup uses the extensionless file when both exist; match that precedence.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rust-toolchain"), "1.75.0\n").unwrap();
+        std::fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.88.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            channel_from_toolchain_file(dir.path()).as_deref(),
+            Some("1.75.0")
+        );
+    }
+
+    #[test]
+    fn toolchain_toml_is_read_when_it_is_the_only_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.88.0\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            channel_from_toolchain_file(dir.path()).as_deref(),
+            Some("1.88.0")
+        );
+    }
+
+    #[test]
+    fn no_toolchain_file_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(channel_from_toolchain_file(dir.path()), None);
+    }
+
+    #[test]
+    fn parse_toolchain_channel_reads_pinned_channel() {
+        let text = "[toolchain]\nchannel = \"1.88.0\"\ntargets = [\"aarch64-unknown-linux-gnu\"]\n";
+        assert_eq!(parse_toolchain_channel(text).as_deref(), Some("1.88.0"));
+    }
+
+    #[test]
+    fn parse_toolchain_channel_none_without_channel_key() {
+        assert_eq!(
+            parse_toolchain_channel("[toolchain]\nprofile = \"minimal\"\n"),
+            None
+        );
+        assert_eq!(parse_toolchain_channel("not toml ]["), None);
+    }
+
+    #[test]
+    fn strip_windows_host_triple_recovers_the_channel() {
+        assert_eq!(
+            strip_windows_host_triple("stable-x86_64-pc-windows-msvc"),
+            Some("stable")
+        );
+        assert_eq!(
+            strip_windows_host_triple("1.88.0-x86_64-pc-windows-gnu"),
+            Some("1.88.0")
+        );
+    }
+
+    #[test]
+    fn strip_windows_host_triple_none_for_other_hosts() {
+        // Guessing here would print a command naming a channel that does not exist.
+        assert_eq!(
+            strip_windows_host_triple("stable-x86_64-unknown-linux-gnu"),
+            None
         );
     }
 

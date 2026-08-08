@@ -1,7 +1,9 @@
 //! Remote execution via SSH — streams stdout and stderr locally and forwards the exit code.
 
 use crate::device::Device;
+use crate::remote::{remote_path_token, shell_escape};
 use anyhow::{Context, Result};
+use std::io::IsTerminal;
 use std::process::{Command, ExitStatus};
 use which::which;
 
@@ -30,6 +32,10 @@ pub fn execute(
         }
         // Source the run scripts in Bash, then exec `cargo run`. ROS/colcon setup files are
         // conventionally `setup.bash`, so POSIX `sh` is not enough for this path.
+        which("bash").context(
+            "run_source needs `bash` to source the scripts, but it is not on PATH — \
+             on Windows install Git Bash or MSYS2, or drop run_source for the desktop device",
+        )?;
         let script = local_run_command(&device.run_source, binary_name, cargo_args, remote_args);
         let status = Command::new("bash")
             .arg("-c")
@@ -38,7 +44,9 @@ pub fn execute(
             .context("failed to invoke bash for cargo run")?;
         return forward_exit(status, "local process terminated by signal");
     }
-    which("ssh").context("ssh is not installed — install OpenSSH to use run")?;
+    let ssh = device.ssh_cmd();
+    which(ssh)
+        .with_context(|| format!("`{ssh}` not found — install OpenSSH, or set ssh_program"))?;
     let (host, deploy_path) = device.require_ssh()?;
     tracing::info!(
         %host,
@@ -48,9 +56,14 @@ pub fn execute(
         remote_args = ?remote_args,
         "executing on device via SSH"
     );
-    let mut cmd = Command::new("ssh");
-    // Allocate a PTY so interactive apps (e.g. ratatui TUI) get a real terminal on the device.
-    cmd.arg("-t");
+    let mut cmd = Command::new(ssh);
+    // Allocate a PTY so interactive apps (e.g. ratatui TUI) get a real terminal on the
+    // device — but only when our own stdin is one. Otherwise ssh warns
+    // ("Pseudo-terminal will not be allocated because stdin is not a terminal") on every
+    // piped or CI run, and the Windows client is stricter still about a non-console stdin.
+    if std::io::stdin().is_terminal() {
+        cmd.arg("-t");
+    }
     if let Some(key) = &device.ssh_key {
         cmd.arg("-i").arg(key);
     }
@@ -87,10 +100,12 @@ fn remote_shell_command(
         .map(|a| shell_escape(a))
         .collect::<Vec<_>>()
         .join(" ");
+    // deploy_path is a *device* path: `~/app` must be expanded by the remote shell.
+    let cwd = remote_path_token(deploy_path);
     let command = if args.is_empty() {
-        format!("cd {} && {src}exec {bin}", shell_escape(deploy_path))
+        format!("cd {cwd} && {src}exec {bin}")
     } else {
-        format!("cd {} && {src}exec {bin} {args}", shell_escape(deploy_path))
+        format!("cd {cwd} && {src}exec {bin} {args}")
     };
     if run_source.is_empty() {
         command
@@ -124,28 +139,8 @@ fn local_run_command(
 fn source_clause(run_source: &[String]) -> String {
     run_source
         .iter()
-        .map(|s| format!(". {} && ", source_path_token(s)))
+        .map(|s| format!(". {} && ", remote_path_token(s)))
         .collect()
-}
-
-/// Format a single source-script path for the shell. `~/x` → `"$HOME"/x` (run-host
-/// expansion); otherwise the path is shell-escaped literally.
-fn source_path_token(script: &str) -> String {
-    if let Some(rest) = script.strip_prefix("~/") {
-        format!("\"$HOME\"/{}", shell_escape(rest))
-    } else {
-        shell_escape(script)
-    }
-}
-
-fn shell_escape(s: &str) -> String {
-    if s.bytes()
-        .all(|b| b.is_ascii_alphanumeric() || b"-_./:".contains(&b))
-    {
-        s.to_owned()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
-    }
 }
 
 #[cfg(test)]
@@ -229,25 +224,11 @@ mod tests {
     }
 
     #[test]
-    fn shell_escape_plain_paths_unchanged() {
-        assert_eq!(shell_escape("/opt/myapp"), "/opt/myapp");
-        assert_eq!(shell_escape("myapp-v2.0"), "myapp-v2.0");
-    }
-
-    #[test]
-    fn shell_escape_spaces_are_quoted() {
-        assert_eq!(shell_escape("my app"), "'my app'");
-    }
-
-    #[test]
-    fn shell_escape_single_quotes_escaped() {
-        assert_eq!(shell_escape("it's"), "'it'\\''s'");
-    }
-
-    #[test]
-    fn shell_escape_tilde_is_quoted_not_expanded() {
-        // `~` in a deploy_path is already expanded by device::resolve; if it still
-        // appears here it must be treated as a literal to avoid double-expansion.
-        assert_eq!(shell_escape("~/myapp"), "'~/myapp'");
+    fn remote_shell_tilde_deploy_path_uses_remote_home() {
+        // `deploy_path` is a device path: `~` belongs to the device user, so it must be
+        // expanded by the remote shell — never locally (which on Windows would produce
+        // something like `C:\Users\me/app`).
+        let script = remote_shell_command("~/myapp", "app", &[], &[]);
+        assert_eq!(script, "cd \"$HOME\"/myapp && exec ./app");
     }
 }

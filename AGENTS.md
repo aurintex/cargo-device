@@ -20,7 +20,8 @@ Guidance for AI coding assistants (Claude Code, Cursor, Codex) working in this r
 - **What**: `cargo-device` — a Cargo subcommand (`cargo device build|run|deploy|sync <device>`) that cross-compiles, deploys, and runs Rust binaries on embedded Linux devices
 - **Architecture**: single Rust binary (`cargo-device`), installed on the host, invoked by cargo as `cargo device`
 - **Config**: reads `[device.*]` tables from `.cargo/config.toml`; merges per-machine overrides from `.cargo/device.local.toml`
-- **Core principle**: orchestrate existing system tools (`cargo`, `rsync`, `ssh`, `scp`) — do not reimplement protocols in Rust
+- **Core principle**: orchestrate existing system tools (`cargo`, `ssh`, `sftp`, `rsync`) — do not reimplement protocols in Rust
+- **Platforms**: Linux, macOS, and Windows hosts; the device is always Linux. Anything that builds a shell command or touches a path must work from all three (see README → Windows)
 - **Phase**: initial development (M1 in progress)
 - **Task management**: task-master-ai (tag: `m1-core-mvp`)
 
