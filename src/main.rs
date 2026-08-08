@@ -11,6 +11,7 @@ mod config;
 mod deploy;
 mod device;
 mod error;
+mod remote;
 mod resolve;
 mod run;
 

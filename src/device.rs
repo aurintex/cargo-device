@@ -1,6 +1,7 @@
 //! Resolved device configuration — all fields expanded and validated for a given operation.
 
 use crate::config::Config;
+use crate::deploy::TransportChoice;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 
@@ -25,9 +26,18 @@ pub struct Device {
     pub ssh_host: Option<String>,
     /// Path to SSH private key, with `~` expanded.
     pub ssh_key: Option<String>,
-    /// Remote deploy path, with `~` expanded.
+    /// Deploy directory on the device. Deliberately NOT tilde-expanded (unlike the local
+    /// `sysroot`/`ssh_key` paths): `~` here is the *device* user's home, expanded by the
+    /// remote shell. Expanding it locally would send the host's home path — on Windows
+    /// even a `C:\…` path — to the device.
     pub deploy_path: Option<String>,
     pub sync_dirs: Vec<String>,
+    /// File-transfer backend preference for deploy/sync.
+    pub transport: TransportChoice,
+    /// Override for the `ssh` executable, with `~` expanded (a host path).
+    pub ssh_program: Option<String>,
+    /// Override for the `sftp` executable, with `~` expanded (a host path).
+    pub sftp_program: Option<String>,
     /// Scripts to `source` on the run host before exec'ing the binary (run-time only).
     /// Deliberately NOT tilde-expanded (unlike `sysroot`/`ssh_key`/`deploy_path`): these
     /// scripts live on the *run host's* filesystem, where `~` is the remote user's home
@@ -66,9 +76,18 @@ pub fn resolve(cfg: &Config, name: &str) -> Result<Device> {
         binary: raw.binary.clone(),
         ssh_host: raw.ssh_host.clone(),
         ssh_key: raw.ssh_key.as_deref().map(expand_tilde),
-        deploy_path: raw.deploy_path.as_deref().map(expand_tilde),
+        // Not tilde-expanded: deploy_path and run_source are resolved on the run host.
+        deploy_path: raw.deploy_path.clone(),
         sync_dirs: raw.sync_dirs.clone().unwrap_or_default(),
-        // Not tilde-expanded: these paths are resolved on the run host, not locally.
+        transport: raw
+            .transport
+            .as_deref()
+            .map(TransportChoice::parse)
+            .transpose()
+            .with_context(|| format!("invalid transport for device '{name}'"))?
+            .unwrap_or_default(),
+        ssh_program: raw.ssh_program.as_deref().map(expand_tilde),
+        sftp_program: raw.sftp_program.as_deref().map(expand_tilde),
         run_source: raw.run_source.clone().unwrap_or_default(),
         no_default_features: raw.no_default_features.unwrap_or(false),
         features: raw.features.clone().unwrap_or_default(),
@@ -97,6 +116,16 @@ impl Device {
     /// Returns the build target, if set.
     pub fn build_target(&self) -> Option<&str> {
         self.target.as_deref()
+    }
+
+    /// The `ssh` executable to invoke — the `ssh_program` override, or `ssh` from `PATH`.
+    pub fn ssh_cmd(&self) -> &str {
+        self.ssh_program.as_deref().unwrap_or("ssh")
+    }
+
+    /// The `sftp` executable to invoke — the `sftp_program` override, or `sftp` from `PATH`.
+    pub fn sftp_cmd(&self) -> &str {
+        self.sftp_program.as_deref().unwrap_or("sftp")
     }
 }
 
@@ -255,7 +284,10 @@ mod tests {
     }
 
     #[test]
-    fn tilde_in_deploy_path_is_expanded() {
+    fn tilde_in_deploy_path_is_not_expanded_locally() {
+        // deploy_path lives on the device: `~` must survive resolve() so the remote shell
+        // expands it against the device user's home. Expanding it here would ship the
+        // host's home directory (on Windows, a `C:\…` path) as a remote path.
         let cfg = make_config(
             "raspi",
             DeviceConfig {
@@ -265,9 +297,67 @@ mod tests {
             },
         );
         let dev = resolve(&cfg, "raspi").unwrap();
-        let path = dev.deploy_path.unwrap();
-        assert!(!path.contains('~'), "tilde should be expanded, got: {path}");
-        assert!(path.ends_with("/myapp"));
+        assert_eq!(dev.deploy_path.as_deref(), Some("~/myapp"));
+    }
+
+    #[test]
+    fn transport_defaults_to_auto_and_parses_from_config() {
+        let cfg = raspi_config();
+        assert_eq!(
+            resolve(&cfg, "raspi").unwrap().transport,
+            TransportChoice::Auto
+        );
+
+        let cfg = make_config(
+            "win",
+            DeviceConfig {
+                transport: Some("sftp".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            resolve(&cfg, "win").unwrap().transport,
+            TransportChoice::Sftp
+        );
+    }
+
+    #[test]
+    fn ssh_and_sftp_programs_default_to_path_lookup() {
+        let dev = resolve(&raspi_config(), "raspi").unwrap();
+        assert_eq!(dev.ssh_cmd(), "ssh");
+        assert_eq!(dev.sftp_cmd(), "sftp");
+    }
+
+    #[test]
+    fn ssh_and_sftp_program_overrides_are_used_and_tilde_expanded() {
+        let cfg = make_config(
+            "win",
+            DeviceConfig {
+                ssh_program: Some("C:/Windows/System32/OpenSSH/ssh.exe".into()),
+                sftp_program: Some("~/tools/sftp".into()),
+                ..Default::default()
+            },
+        );
+        let dev = resolve(&cfg, "win").unwrap();
+        assert_eq!(dev.ssh_cmd(), "C:/Windows/System32/OpenSSH/ssh.exe");
+        assert!(
+            !dev.sftp_cmd().contains('~'),
+            "host paths are tilde-expanded: {}",
+            dev.sftp_cmd()
+        );
+    }
+
+    #[test]
+    fn invalid_transport_error_names_the_device() {
+        let cfg = make_config(
+            "win",
+            DeviceConfig {
+                transport: Some("carrier-pigeon".into()),
+                ..Default::default()
+            },
+        );
+        let err = resolve(&cfg, "win").unwrap_err().to_string();
+        assert!(err.contains("win"), "error should name the device: {err}");
     }
 
     #[test]

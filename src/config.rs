@@ -38,8 +38,22 @@ pub struct DeviceConfig {
     pub binary: Option<String>,
     pub ssh_host: Option<String>,
     pub ssh_key: Option<String>,
+    /// Deploy directory **on the device**. Deliberately not expanded on the host: a
+    /// leading `~` is the device user's home and is expanded by the remote shell (or
+    /// resolved relative to the sftp session's home).
     pub deploy_path: Option<String>,
     pub sync_dirs: Option<Vec<String>>,
+    /// File-transfer backend: `"auto"` (default — rsync when installed, else sftp),
+    /// `"rsync"`, or `"sftp"`. `sftp` ships with OpenSSH and is the portable choice
+    /// on hosts without rsync, such as Windows.
+    pub transport: Option<String>,
+    /// Override the `ssh` executable (name or absolute path). Windows hosts often have
+    /// two OpenSSH builds on `PATH` — Git's MSYS one and `C:\Windows\System32\OpenSSH` —
+    /// which differ in key parsing and path handling; this pins the one to use.
+    pub ssh_program: Option<String>,
+    /// Override the `sftp` executable (name or absolute path). Same rationale as
+    /// `ssh_program`; keep both pointing at the same OpenSSH installation.
+    pub sftp_program: Option<String>,
     /// Scripts to `source` on the run host immediately before exec'ing the binary
     /// (run-time only — orthogonal to the build-time `env`/`sdk` fields). Paths are
     /// interpreted on the *run host* (the device for SSH runs, the local machine for the
@@ -73,6 +87,9 @@ impl DeviceConfig {
             ssh_key: other.ssh_key.or(self.ssh_key),
             deploy_path: other.deploy_path.or(self.deploy_path),
             sync_dirs: other.sync_dirs.or(self.sync_dirs),
+            transport: other.transport.or(self.transport),
+            ssh_program: other.ssh_program.or(self.ssh_program),
+            sftp_program: other.sftp_program.or(self.sftp_program),
             run_source: other.run_source.or(self.run_source),
             no_default_features: other.no_default_features.or(self.no_default_features),
             features: other.features.or(self.features),
@@ -309,6 +326,27 @@ AMENT_PREFIX_PATH = "~/ros2_libs"
                 .map(String::as_str),
             Some("humble")
         );
+    }
+
+    #[test]
+    fn parse_transport_from_toml() {
+        let toml = "[device.win]\ntransport = \"sftp\"\n";
+        let cfg: Config = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.device["win"].transport.as_deref(), Some("sftp"));
+    }
+
+    #[test]
+    fn merge_transport_local_overrides_base() {
+        // The typical Windows case: the committed config says rsync, the machine has none.
+        let base = DeviceConfig {
+            transport: Some("rsync".into()),
+            ..Default::default()
+        };
+        let local = DeviceConfig {
+            transport: Some("sftp".into()),
+            ..Default::default()
+        };
+        assert_eq!(base.merge(local).transport.as_deref(), Some("sftp"));
     }
 
     #[test]

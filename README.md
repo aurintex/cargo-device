@@ -11,7 +11,7 @@ Inspired by Qt Creator's Kit system and Flutter's `--device` flag. Define your t
 There is no unified workflow in Rust for:
 
 - Cross-compiling for a target device (Raspberry Pi, industrial boards, and similar SBCs)
-- Deploying the compiled binary to the device via SSH/rsync
+- Deploying the compiled binary to the device over SSH (rsync or SFTP)
 - Running it with local stdout/stderr
 - Syncing additional artifacts (models, configs, assets)
 - Sourcing a runtime environment on the device before the binary starts (e.g. ROS 2 `setup.bash`, Yocto SDK activation, or any shell environment that sets `LD_LIBRARY_PATH` / `PATH`)
@@ -26,12 +26,15 @@ Developers currently juggle Python scripts, shell scripts, and manual combinatio
 
 | Tool | Required for | Notes |
 |------|-------------|-------|
-| `ssh` (OpenSSH) | `run`, `deploy`, `sync` on remote devices | Pre-installed on macOS and most Linux distros |
-| `rsync` | `deploy`, `sync` on remote devices | `apt install rsync` / `brew install rsync` |
+| `ssh` (OpenSSH) | `run`, `deploy`, `sync` on remote devices | Pre-installed on macOS, most Linux distros, and Windows 10/11 |
+| `sftp` (OpenSSH) | `deploy`, `sync` when `transport = "sftp"` | Ships with the same OpenSSH suite as `ssh` — no extra install |
+| `rsync` | `deploy`, `sync` when `transport = "rsync"` | `apt install rsync` / `brew install rsync`; optional — see [File transport](#file-transport) |
 | `cross` | Build when `cross = true` is set | `cargo install cross` (requires Docker) |
 | Cross-linker (e.g. `gcc-aarch64-linux-gnu`) | Build when `linker` is set | Recommended over `cross` — no Docker needed |
 
-`ssh` and `rsync` are detected at runtime; `cargo-device` reports a clear error if a required tool is missing. `cross` (Docker) is opt-in via `cross = true` — the default for a configured `target` is a plain `cargo build` using your local toolchain (`linker`/`sysroot`/`rustflags`/`env`).
+Tools are detected at runtime; `cargo-device` reports a clear error if a required one is missing. `cross` (Docker) is opt-in via `cross = true` — the default for a configured `target` is a plain `cargo build` using your local toolchain (`linker`/`sysroot`/`rustflags`/`env`).
+
+`rsync` is **not** required: with the default `transport = "auto"`, `cargo-device` uses `rsync` when it is installed and falls back to `sftp` otherwise. That fallback is what makes Windows work without WSL, MSYS2, or Cygwin — see [Windows](#windows).
 
 ## Installation
 
@@ -56,7 +59,7 @@ Work interactively: ask me one question at a time for any value you cannot infer
 
 Then do the setup:
 1. Install cargo-device with `cargo install cargo-device` if `cargo device --help` is not available.
-2. Install or tell me the missing system dependencies for my OS: `ssh`, `rsync`, the Rust target via `rustup target add <target>`, and either a cross-linker such as `gcc-aarch64-linux-gnu`, `cross`, or the SDK path I gave you.
+2. Install or tell me the missing system dependencies for my OS: `ssh` (plus `rsync` on Linux/macOS — on Windows the built-in OpenSSH `sftp` is used instead), the Rust target via `rustup target add <target>`, and either a cross-linker such as `gcc-aarch64-linux-gnu`, `cross`, or the SDK path I gave you. On Windows, `cross` is the only working build backend — host cross-linkers and Yocto/Bootlin SDKs are Linux binaries.
 3. Create or update `.cargo/config.toml` with a committed `[device.<name>]` config containing portable values only: target, linker/cross/sdk/sysroot/rustflags/env as needed, deploy_path, sync_dirs if useful, package/binary if needed, and optional run_source.
 4. Create or update `.cargo/device.local.toml` with my private machine values such as `ssh_host`, `ssh_key`, local sdk/sysroot paths, or local run_source overrides.
 5. Ensure `.cargo/device.local.toml` is listed in `.gitignore`.
@@ -124,8 +127,11 @@ linker = "aarch64-linux-gnu-gcc"     # optional: local cross-linker installed on
 # cross = true                       # optional: build via cross (Docker) instead of cargo
 ssh_host = "pi@192.168.1.42"         # override this in device.local.toml
 ssh_key = "~/.ssh/id_ed25519"
-deploy_path = "/tmp/myapp"
-sync_dirs = ["models/", "config/"]   # optional: rsync these directories too
+deploy_path = "/tmp/myapp"           # a device path; `~` expands to the *device* user's home
+sync_dirs = ["models/", "config/"]   # optional: copy these directories too
+# transport = "auto"                 # optional: "auto" (default) | "rsync" | "sftp"
+# ssh_program  = "C:/Windows/System32/OpenSSH/ssh.exe"   # optional: pin the ssh binary
+# sftp_program = "C:/Windows/System32/OpenSSH/sftp.exe"  # optional: pin the sftp binary
 package = "myapp"                  # optional: workspace crate for `cargo -p`
 binary  = "myapp"                  # optional: deployed binary name (defaults to package)
 # optional: source these scripts on the run host before the binary starts (run-time only)
@@ -150,6 +156,45 @@ These fields compose — set as many as your toolchain needs:
 | `env` | environment variables for the build process and its build scripts (`[device.<name>.env]` table) |
 | `sdk` | source a Yocto/Buildroot `environment-setup` script before building (composes with the fields above) |
 | `cross` | `true` → build in Docker via `cross` instead of the local toolchain |
+
+### Deploy configuration fields
+
+| Field | Effect |
+|-------|--------|
+| `deploy_path` | directory on the device. A leading `~` is expanded by the **device**, not the host |
+| `sync_dirs` | project directories copied into `deploy_path`, contents-first (`models/` → `<deploy_path>/models/…`) |
+| `transport` | `"auto"` (default) / `"rsync"` / `"sftp"` — see [File transport](#file-transport) |
+| `ssh_program` | absolute path or name of the `ssh` binary; overrides `PATH` lookup |
+| `sftp_program` | absolute path or name of the `sftp` binary; overrides `PATH` lookup |
+
+> **Fix (vs. ≤ 0.1.2):** `deploy_path` is no longer tilde-expanded on the host. `~/myapp`
+> now means the **device** user's home, as documented — previously it was expanded to the
+> host user's home before being sent, which silently pointed at the wrong directory when
+> the two usernames differed, and produced a `C:\Users\…` path on Windows. `ssh_key`,
+> `sysroot`, and `env` values are host paths and are still expanded locally.
+
+### File transport
+
+`deploy` and `sync` copy files with one of two backends:
+
+| `transport` | Behaviour |
+|---|---|
+| `"auto"` *(default)* | `rsync` when it is on `PATH`, otherwise `sftp` |
+| `"rsync"` | always `rsync`; errors if it is not installed |
+| `"sftp"` | always `sftp` batch mode (`sftp -b -`), one connection per transfer |
+
+`rsync` is faster for large or repeated syncs because it transfers deltas. `sftp` is the
+portable baseline: it is part of the OpenSSH suite, so it is available anywhere `ssh` is.
+This is the same split Qt Creator uses for remote Linux devices — SFTP by default, rsync
+when the setup supports it.
+
+Behavioural differences to be aware of on the sftp path:
+
+- **No delta transfer** — every file in `sync_dirs` is re-uploaded on each deploy.
+- **Permissions are not carried over** by the SFTP protocol, so the deployed binary is
+  explicitly `chmod 755`'d. Other synced files land with the server's default mode.
+- Remote directories are created up-front with a single `ssh … mkdir -p` (both transports),
+  rather than rsync's `--mkpath`, which needs rsync ≥ 3.2.3.
 
 ### Run-time environment
 
@@ -271,6 +316,77 @@ See [Tested configurations](#tested-configurations) for which host/target combin
 
 ---
 
+## Windows
+
+Windows hosts are supported and tested — no WSL, MSYS2, or Cygwin needed. Two pieces make
+it work:
+
+- **Transfer** uses `sftp` from the built-in OpenSSH client, because Windows has no
+  `rsync`. With the default `transport = "auto"` this happens automatically.
+- **Cross-compilation** uses `cross` (Docker Desktop), because host cross-linkers such as
+  `gcc-aarch64-linux-gnu` are Linux packages. Prebuilt Linux SDKs (Bootlin, Yocto) are
+  ELF binaries and cannot run on a Windows host either, so `linker`/`sdk` are Linux/macOS
+  options only.
+
+```toml
+[device.edge]
+target = "aarch64-unknown-linux-gnu"
+cross  = true            # host cross-linkers are not available on Windows
+ssh_host = "edge"        # an entry in %USERPROFILE%\.ssh\config works
+deploy_path = "~/myapp"
+# transport = "sftp"     # optional: "auto" already picks sftp when rsync is absent
+```
+
+```powershell
+rustup target add aarch64-unknown-linux-gnu
+cargo install cross                       # requires Docker Desktop (Linux containers)
+cargo device build edge
+cargo device run edge
+```
+
+### Pinned toolchains and `cross`
+
+`cross` runs `rustup` **inside** its Linux container, but against your host's rustup home.
+That home records a Windows host triple, so rustup refuses to add the Linux toolchain and
+suggests `rustup target add`, which does not fix it:
+
+```
+error: toolchain 'stable-x86_64-unknown-linux-gnu' may not be able to run on this system
+```
+
+Install the toolchain once with `--force-non-host` (`<channel>` is your
+`rust-toolchain.toml` channel, or `stable`):
+
+```powershell
+rustup toolchain install <channel>-x86_64-unknown-linux-gnu --profile minimal --force-non-host
+```
+
+`cargo device` checks for this before invoking `cross` and warns with the exact command.
+
+### Picking the right OpenSSH
+
+Windows commonly has more than one OpenSSH client on `PATH` — `C:\Windows\System32\OpenSSH`
+and Git for Windows' MSYS build under `C:\Program Files\Git\usr\bin`. They differ in path
+handling and in which private-key files they accept: an OpenSSH key saved with CRLF line
+endings, for example, loads fine under the Windows client but fails under the MSYS one with
+`invalid format`. Pin the pair you want in `.cargo/device.local.toml`:
+
+```toml
+[device.edge]
+ssh_program  = "C:/Windows/System32/OpenSSH/ssh.exe"
+sftp_program = "C:/Windows/System32/OpenSSH/sftp.exe"
+```
+
+### Known limits
+
+- No `rsync` delta transfer, so `sync_dirs` are re-uploaded in full each deploy.
+- `run_source` on the **`desktop`** device needs `bash` (Git Bash or MSYS2). It is
+  unaffected for remote devices, where the scripts are sourced by the device's own shell.
+- Building against a device sysroot rsync'd from the target (approach **A** below) is a
+  Linux/macOS workflow; on Windows use `cross`.
+
+---
+
 ## Tested configurations
 
 The table below shows which host/target/approach combinations have been verified and which
@@ -283,10 +399,19 @@ verify with `readelf -V <binary> | grep GLIBC_ | sort -uV | tail`.
 | Ubuntu 24.04 (gcc 13, glibc 2.39) | aarch64 — Debian 12 (glibc 2.36) | `linker` + `sysroot` (Bootlin SDK `2021.11`, glibc 2.34) | ✅ Hardware tested |
 | Ubuntu 24.04 | aarch64 | `cross = true` (Docker) | ✅ Hardware tested |
 | Ubuntu 24.04 | x86_64 (same as host) | `desktop` — native build, no target set | ✅ Tested |
+| Windows 11 (Docker Desktop) | aarch64 — Debian 12 (glibc 2.36) | `cross = true` + `transport = "sftp"` + `ssh_program`/`sftp_program` | ✅ Hardware tested |
+| Windows 11 | x86_64 (same as host) | `desktop` — native build, no target set | ✅ Tested |
 | Ubuntu/Debian | aarch64 | `linker` only, **no sysroot** | ⚠️ glibc mismatch if host glibc > device's |
+| Windows | any | `linker` or `sdk` (host cross-toolchain) | ❌ Not supported — those toolchains are Linux binaries; use `cross` |
 | macOS | aarch64 | `cross = true` (Docker) | 🔲 Expected to work, not tested |
 | Any Linux | armv7 / armhf | `cross = true` (Docker) | 🔲 Expected to work, not tested |
 | Any Linux | armv7 / armhf | `linker` (`arm-linux-gnueabihf-gcc`) + `sysroot` | 🔲 Expected to work, not tested |
+
+The Windows rows were verified end-to-end against a Radxa Rock 5C (Debian 12, aarch64)
+from Windows 11: `cross` build → `sftp` deploy of the binary and a nested `sync_dirs` tree
+(including a filename with spaces) → `ssh` run with `run_source` and remote arguments,
+with the binary's stdout streamed back to the host. `cargo test` and
+`cargo clippy --all-targets -- -D warnings` run on Windows in CI alongside Linux and macOS.
 
 ---
 
@@ -294,7 +419,9 @@ verify with `readelf -V <binary> | grep GLIBC_ | sort -uV | tail`.
 
 `device.local.toml` overrides `config.toml` field by field. A missing `device.local.toml` is not an error.
 
-Most fields replace wholesale when overridden (`target`, `linker`, `sysroot`, `run_source`, `sync_dirs`, `features`, …). The `env` table is the exception: it merges **per key**, so `config.toml` can hold portable variables (e.g. `ROS_DISTRO`) while `device.local.toml` adds machine-specific ones (e.g. `AMENT_PREFIX_PATH`) without dropping the base.
+Most fields replace wholesale when overridden (`target`, `linker`, `sysroot`, `run_source`, `sync_dirs`, `features`, `transport`, …). The `env` table is the exception: it merges **per key**, so `config.toml` can hold portable variables (e.g. `ROS_DISTRO`) while `device.local.toml` adds machine-specific ones (e.g. `AMENT_PREFIX_PATH`) without dropping the base.
+
+Per-machine fields belong in `device.local.toml`: `transport`, `ssh_program`, and `sftp_program` describe the *host*, so a mixed Linux/Windows team keeps the committed `config.toml` portable and overrides them locally.
 
 `run_source` replaces wholesale — if `device.local.toml` defines it, the entire list from `config.toml` is replaced. This is intentional: different machines may need different sourcing paths.
 
